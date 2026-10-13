@@ -1,0 +1,49 @@
+# --- KeepSake: photos, caches and downloaded tools never go in Git ---
+data/
+_culling/
+tools/
+
+# Photo and video files anywhere, as a safety net
+*.cr2
+*.cr3
+*.crw
+*.nef
+*.nrw
+*.arw
+*.srf
+*.sr2
+*.raf
+*.rw2
+*.orf
+*.pef
+*.srw
+*.dng
+*.3fr
+*.iiq
+*.x3f
+*.jpg
+*.jpeg
+*.heic
+*.heif
+*.hif
+*.mp4
+*.mov
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# --- Node / Electron (Phase 5) ---
+node_modules/
+out/
+
+# --- OS and editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

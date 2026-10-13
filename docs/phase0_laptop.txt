@@ -1,0 +1,6 @@
+﻿KeepSake laptop report - 2026-10-13 18:23
+CPU:      AMD Ryzen 5 7530U with Radeon Graphics
+Cores:    6 physical, 12 logical
+RAM:      15.4 GB
+Windows:  Microsoft Windows 11 Home Single Language (10.0.26200)
+Drive C:  SSD, NVMe, 163 GB free

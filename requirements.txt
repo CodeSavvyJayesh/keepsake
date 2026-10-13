@@ -1,0 +1,10 @@
+# KeepSake engine libraries (Python 3.11). Installed by setup.ps1.
+rawpy>=0.21          # RAW files: pull the embedded preview (LibRaw)
+PyExifTool>=0.5.6    # camera, lens and capture time via ExifTool
+Pillow>=10.3         # JPEG/PNG; includes libjpeg-turbo for fast decoding
+pillow-heif>=0.16    # iPhone / camera HEIC and HIF files
+numpy>=1.26,<3       # fast maths on images
+opencv-python>=4.9   # image checks (used from Phase 2)
+psutil>=5.9          # CPU, memory and disk info
+tqdm>=4.66           # progress bars
+pytest>=8.0          # automatic tests
