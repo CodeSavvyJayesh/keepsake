@@ -8,7 +8,9 @@ from .config import exiftool_path
 # -G      group names in keys, e.g. "EXIF:Model"
 # -n      numbers as numbers, not text
 # -charset filename=utf8   lets Windows file names with Hindi/Marathi characters work
-EXIFTOOL_ARGS = ["-G", "-n", "-charset", "filename=utf8"]
+# -fast2  skips the large maker-notes and trailer sections, which we never use: much
+#         faster on external drives. Camera, capture time and orientation are unaffected.
+EXIFTOOL_ARGS = ["-G", "-n", "-charset", "filename=utf8", "-fast2"]
 
 BATCH_SIZE = 200   # files per ExifTool call: far faster than one call per file
 

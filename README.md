@@ -29,6 +29,7 @@ Run these inside `C:\KeepSake` (in PowerShell type `.\ks`, in Command Prompt jus
 | `ks list [folder]` | Counts photos by folder, file type and camera; finds RAW+JPEG pairs and broken files |
 | `ks previews [folder]` | Pulls the preview out of each RAW file, times it, saves samples |
 | `ks edge` | Creates the photo folders and the edge-case test files |
+| `ks match "folder"` | Matches a wedding's selected photos to the originals; saves labels to `data\labels` |
 | `ks test` | Runs the automatic tests |
 
 Without a folder, `list` and `previews` use `data\test_photos`.

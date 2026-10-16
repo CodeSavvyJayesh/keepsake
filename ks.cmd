@@ -20,6 +20,7 @@ if /i "%CMD%"=="check" goto check
 if /i "%CMD%"=="list" goto list
 if /i "%CMD%"=="previews" goto previews
 if /i "%CMD%"=="edge" goto edge
+if /i "%CMD%"=="match" goto match
 if /i "%CMD%"=="test" goto test
 echo Unknown command: %CMD%
 goto help
@@ -44,6 +45,10 @@ exit /b %errorlevel%
 "%PY%" "%ROOT%scripts\make_edge_cases.py"
 exit /b %errorlevel%
 
+:match
+"%PY%" "%ROOT%scripts\match_selected.py" %2
+exit /b %errorlevel%
+
 :test
 "%PY%" -m pytest --rootdir "%ROOT%." "%ROOT%tests"
 exit /b %errorlevel%
@@ -56,6 +61,7 @@ echo   ks check              check tools and this laptop
 echo   ks list [folder]      count photos by camera, type and folder
 echo   ks previews [folder]  pull previews out of RAW files and time them
 echo   ks edge               create the photo folders and edge-case files
+echo   ks match "folder"     match a wedding's selected photos to the originals
 echo   ks test               run the automatic tests
 echo.
 echo Without a folder, list and previews use data\test_photos.

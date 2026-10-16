@@ -1,0 +1,35 @@
+KeepSake setup check - 2026-10-13 18:27
+
+Python
+OK    Python                     3.11.9  (C:\KeepSake\.venv\Scripts\python.exe)
+OK    Virtual environment        active
+
+Libraries
+OK    rawpy (RAW previews)       0.27.1
+OK    PyExifTool                 0.5.6
+OK    Pillow                     12.3.0
+OK    pillow-heif (HEIC)         1.8.1
+OK    NumPy                      2.4.6
+OK    OpenCV                     5.0.0
+OK    psutil                     7.2.2
+OK    tqdm                       4.70.1
+OK    pytest                     9.1.1
+OK    LibRaw                     0.22.1
+OK    Fast JPEG (libjpeg-turbo)  built into Pillow
+OK    HEIC opener                registered
+
+ExifTool
+OK    ExifTool                   13.59  (C:\KeepSake\tools\exiftool\exiftool.exe)
+
+This laptop
+OK    RAM                        15.4 GB
+OK    CPU cores                  6 physical, 12 logical; engine will use 11 workers
+OK    Free disk space            162 GB
+OK    JPEG decode, 24 MP         full 190 ms  vs  reduced 120 ms  (1.6x faster)
+
+Project folders
+OK    data/test_photos           exists
+OK    data/weddings              exists
+OK    data/scratch               exists
+
+All good. Phase 0 setup is complete.
