@@ -86,10 +86,12 @@ CREATE TABLE IF NOT EXISTS faces (
     score      REAL,                   -- how sure YuNet is that this is a face
     rel_w      REAL,                   -- face width / photo's long side
     sharp      REAL, contrast REAL,    -- sharpness and detail of the middle of the face
+    subject    INTEGER,                -- 1 = one of the photo's main people (large, in focus)
     read       INTEGER,                -- 1 = eyes and expression were read
     blink_l REAL, blink_r REAL,        -- 0 = eye wide open, 1 = shut (the person's left/right)
     squint REAL, look_down REAL, smile REAL, jaw_open REAL,
     yaw REAL, pitch REAL, roll REAL,   -- head turn, nod, tilt in degrees
+    eyes       TEXT,                   -- open / closed / unsure / down / side (see faces.py)
     PRIMARY KEY (photo_id, n)
 );
 
@@ -146,9 +148,20 @@ class Catalog:
         self.db.execute("PRAGMA journal_mode=WAL")      # crash-safe, readers never block
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        self._add_missing_columns()
 
     def close(self) -> None:
         self.db.close()
+
+    def _add_missing_columns(self) -> None:
+        """Catalogs made by an older KeepSake get the columns added since (data is kept)."""
+        added = {"faces": [("subject", "INTEGER"), ("eyes", "TEXT")]}
+        for table, columns in added.items():
+            have = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
+            for name, kind in columns:
+                if name not in have:
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+        self.db.commit()
 
     def __enter__(self) -> "Catalog":
         return self
@@ -287,6 +300,19 @@ class Catalog:
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (r["id"], version, int(r.get("ok", False)), r.get("error"),
                      len(r.get("faces", [])), int(bool(r.get("eyes")))))
+
+    def refresh_eyes(self, rule) -> int:
+        """Re-judge every read face with the current eye rule, from the stored scores (no need
+        to read the photos again). Returns how many verdicts changed."""
+        cols = ("read", "yaw", "pitch", "look_down", "blink_l", "blink_r", "smile", "squint")
+        changes = []
+        for row in self.db.execute(f"SELECT photo_id, n, eyes, {', '.join(cols)} FROM faces"):
+            verdict = rule(dict(zip(cols, row[3:])))
+            if verdict != row[2]:
+                changes.append((verdict, row[0], row[1]))
+        with self.db:
+            self.db.executemany("UPDATE faces SET eyes = ? WHERE photo_id = ? AND n = ?", changes)
+        return len(changes)
 
     def save_labels(self, selected_by_path: dict[str, int], source: str) -> int:
         """Store the studio's choices against catalog photos; returns how many matched."""

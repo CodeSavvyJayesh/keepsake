@@ -24,6 +24,7 @@ if /i "%CMD%"=="match" goto match
 if /i "%CMD%"=="ingest" goto ingest
 if /i "%CMD%"=="quality" goto quality
 if /i "%CMD%"=="faces" goto faces
+if /i "%CMD%"=="eyecheck" goto eyecheck
 if /i "%CMD%"=="models" goto models
 if /i "%CMD%"=="test" goto test
 echo Unknown command: %CMD%
@@ -65,6 +66,10 @@ exit /b %errorlevel%
 "%PY%" "%ROOT%scripts\faces.py" %2 %3 %4 %5 %6 %7 %8 %9
 exit /b %errorlevel%
 
+:eyecheck
+"%PY%" "%ROOT%scripts\eyecheck.py" %2
+exit /b %errorlevel%
+
 :models
 "%PY%" "%ROOT%scripts\models.py" %2 %3
 exit /b %errorlevel%
@@ -86,6 +91,7 @@ echo   ks ingest "folder"    read a whole shoot once: catalog, previews, thumbna
 echo   ks ingest "folder" --bench   speed test: best number of workers for this drive
 echo   ks quality "folder"   measure sharpness and exposure of an ingested shoot
 echo   ks faces "folder"     find faces; read eyes, smiles and head pose
+echo   ks eyecheck "folder"  make the 50-face eye check page (Phase 2 exit test)
 echo   ks models             download the AI model files (faces, eyes)
 echo   ks test               run the automatic tests
 echo.
