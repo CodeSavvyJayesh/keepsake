@@ -21,6 +21,7 @@ if /i "%CMD%"=="list" goto list
 if /i "%CMD%"=="previews" goto previews
 if /i "%CMD%"=="edge" goto edge
 if /i "%CMD%"=="match" goto match
+if /i "%CMD%"=="ingest" goto ingest
 if /i "%CMD%"=="test" goto test
 echo Unknown command: %CMD%
 goto help
@@ -49,6 +50,10 @@ exit /b %errorlevel%
 "%PY%" "%ROOT%scripts\match_selected.py" %2
 exit /b %errorlevel%
 
+:ingest
+"%PY%" "%ROOT%scripts\ingest.py" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
 :test
 "%PY%" -m pytest --rootdir "%ROOT%." "%ROOT%tests"
 exit /b %errorlevel%
@@ -62,6 +67,8 @@ echo   ks list [folder]      count photos by camera, type and folder
 echo   ks previews [folder]  pull previews out of RAW files and time them
 echo   ks edge               create the photo folders and edge-case files
 echo   ks match "folder"     match a wedding's selected photos to the originals
+echo   ks ingest "folder"    read a whole shoot once: catalog, previews, thumbnails
+echo   ks ingest "folder" --bench   speed test: best number of workers for this drive
 echo   ks test               run the automatic tests
 echo.
 echo Without a folder, list and previews use data\test_photos.

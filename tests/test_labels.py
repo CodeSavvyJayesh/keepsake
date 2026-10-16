@@ -57,3 +57,17 @@ def test_second_copy_of_same_original_is_a_repeat(tmp_path):
     sel = [make(tmp_path / "sel" / "Day1" / "DSC_5.JPG"), make(tmp_path / "sel" / "Day2" / "DSC_5.JPG")]
     r = match_selected(raw, sel)
     assert len(r.matches) == 1 and len(r.repeats) == 1
+
+
+def test_typo_in_extension_matched_by_size(tmp_path):
+    a = make(tmp_path / "raw" / "camA" / "DSC_0342.JPG", b"aaaa")
+    b = make(tmp_path / "raw" / "camB" / "DSC_0342.JPG", b"bbbbbbbb")
+    typo = make(tmp_path / "sel" / "DSC_0342.JPGG.JPG", b"bbbbbbbb")
+    r = match_selected([a, b], [typo])
+    assert r.matches == {b: typo} and r.how["file name with typo + size"] == 1
+
+
+def test_typo_with_different_size_is_not_guessed(tmp_path):
+    a = make(tmp_path / "raw" / "DSC_0509.JPG", b"aaaa")
+    typo = make(tmp_path / "sel" / "DSC_0509.JPGG.JPG", b"edited!")
+    assert match_selected([a], [typo]).unmatched == [typo]

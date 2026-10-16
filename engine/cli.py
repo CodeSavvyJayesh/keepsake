@@ -5,14 +5,20 @@ import sys
 from pathlib import Path
 
 
-def path_arg(default: Path) -> Path:
-    """The folder or file given on the command line, or `default`.
+def clean_path(text: str) -> Path:
+    """A folder typed on the Windows command line, cleaned up.
 
-    Cleans up a Windows quirk: `ks list "E:\\"` arrives as `E:"`.
+    Fixes a Windows quirk: `ks list "E:\\"` arrives as `E:"`, and a bare `E:` means the
+    current folder on E:, not the drive.
     """
-    if len(sys.argv) < 2 or not sys.argv[1].strip():
-        return default
-    text = sys.argv[1].strip().strip('"')
+    text = text.strip().strip('"')
     if len(text) == 2 and text[1] == ":":
         text += "\\"
     return Path(text)
+
+
+def path_arg(default: Path) -> Path:
+    """The folder or file given as the first command-line argument, or `default`."""
+    if len(sys.argv) < 2 or not sys.argv[1].strip():
+        return default
+    return clean_path(sys.argv[1])

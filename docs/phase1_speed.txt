@@ -1,0 +1,11 @@
+Speed test 2026-10-16 20:22  (11,853 files, 150 per run)
+  1 worker                               8.2 photos/s      5.8 MB/s    0.71 MB/photo  (150 photos, 0 failed)
+  2 workers                             14.2 photos/s     10.4 MB/s    0.73 MB/photo  (150 photos, 0 failed)
+  4 workers                             23.6 photos/s     15.2 MB/s    0.65 MB/photo  (150 photos, 0 failed)
+  5 workers                             26.4 photos/s     18.7 MB/s    0.71 MB/photo  (150 photos, 0 failed)
+  10 workers                            31.8 photos/s     22.0 MB/s    0.69 MB/photo  (150 photos, 0 failed)
+  old way: full decode, 10 workers       6.6 photos/s     42.7 MB/s    6.48 MB/photo  (150 photos, 0 failed)
+  Best: 10 workers, 31.8 photos/s (0.69 MB read per photo).
+  Built-in previews are 4.8x faster than decoding every photo (6.6 photos/s, 6.5 MB per photo).
+  This shoot (11,853 files) should take about 6 min 13 s.
+

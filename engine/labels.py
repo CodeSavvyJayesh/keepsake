@@ -32,24 +32,34 @@ def match_selected(originals: Iterable[Path], selected: Iterable[Path],
     Tried in order, stopping at the first that gives a single answer:
       1. same file name (ignoring upper/lower case)
       2. same name without the extension, for edited exports (IMG_1043.CR3 -> IMG_1043.jpg)
-      3. if several originals share the name: the one with the same file size
-      4. still several: the one with the same camera and capture time (needs meta_fn)
+      3. same name up to the first dot, for typos made while copying (DSC_0342.JPGG.JPG)
+      4. if several originals share the name: the one with the same file size
+      5. still several: the one with the same camera and capture time (needs meta_fn)
     Anything that stays ambiguous is reported as unmatched rather than guessed.
     """
     result = MatchResult()
     by_name: dict[str, list[Path]] = defaultdict(list)
     by_stem: dict[str, list[Path]] = defaultdict(list)
+    by_base: dict[str, list[Path]] = defaultdict(list)
     for p in originals:
         by_name[p.name.lower()].append(p)
         by_stem[p.stem.lower()].append(p)
+        by_base[_base(p)].append(p)
 
     ambiguous: list[tuple[Path, list[Path]]] = []
     for s in selected:
         candidates = by_name.get(s.name.lower()) or by_stem.get(s.stem.lower()) or []
+        how = "file name"
+        if not candidates:
+            # a typo in the extension: only trust it when the copy is byte-for-byte the same size
+            candidates = [c for c in by_base.get(_base(s), []) if size_fn(c) == size_fn(s)]
+            how = "file name with typo + size"
         if not candidates:
             result.unmatched.append(s)
         elif len(candidates) == 1:
-            _add(result, candidates[0], s, "file name")
+            _add(result, candidates[0], s, how)
+        elif how != "file name":
+            ambiguous.append((s, candidates))
         else:
             same_size = [c for c in candidates if size_fn(c) == size_fn(s)]
             if len(same_size) == 1:
@@ -70,6 +80,11 @@ def match_selected(originals: Iterable[Path], selected: Iterable[Path],
     else:
         result.unmatched.extend(s for s, _ in ambiguous)
     return result
+
+
+def _base(path: Path) -> str:
+    """The name up to the first dot: 'DSC_0342.JPGG.JPG' -> 'dsc_0342'."""
+    return path.name.split(".", 1)[0].lower()
 
 
 def _add(result: MatchResult, original: Path, copy: Path, how: str) -> None:
