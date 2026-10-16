@@ -39,7 +39,7 @@ SOURCE_NAMES = {EMBEDDED: "built-in preview", DECODED: "decoded photo",
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="ks ingest",
                                  description="Read a whole shoot once (the drive is only read).")
-    ap.add_argument("folder", help="the shoot folder, in quotes")
+    ap.add_argument("folder", nargs="?", help="the shoot folder, in quotes")
     ap.add_argument("--bench", action="store_true", help="speed test: find the best worker count")
     ap.add_argument("--workers", type=int, help="number of worker processes")
     ap.add_argument("--limit", type=int, help="only the next N photos")
@@ -47,7 +47,50 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--full-decode", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--bench-workers", help=argparse.SUPPRESS)     # e.g. 1,2 (tests)
     ap.add_argument("--bench-size", type=int, default=150, help=argparse.SUPPRESS)
-    return ap.parse_args()
+    ap.add_argument("--selfcheck", action="store_true",
+                    help="check that every image library loads (used by the Mac build)")
+    args = ap.parse_args()
+    if not args.folder and not args.selfcheck:
+        ap.error("give the shoot folder, for example: ks ingest \"E:\\Sharma Wedding\\Raw\"")
+    return args
+
+
+def selfcheck() -> int:
+    """Load every image library the engine needs and print its version. 0 = all good."""
+    import platform
+
+    from PIL import Image, features
+
+    from engine.config import FROZEN, DATA_DIR
+    print(f"KeepSake engine on {platform.system()} {platform.machine()}, Python "
+          f"{platform.python_version()}{', packaged app' if FROZEN else ''}")
+    print(f"  Data folder        {DATA_DIR}")
+    problems = 0
+
+    def line(name: str, value: str, ok: bool = True) -> None:
+        nonlocal problems
+        problems += not ok
+        print(f"  {'OK  ' if ok else 'FAIL'}  {name:<18} {value}")
+
+    line("Pillow", Image.__version__)
+    line("libjpeg-turbo", "yes" if features.check_feature("libjpeg_turbo") else "no",
+         bool(features.check_feature("libjpeg_turbo")))
+    for name, load in (("rawpy / LibRaw", lambda: __import__("rawpy")),
+                       ("pillow-heif", lambda: __import__("pillow_heif")),
+                       ("NumPy", lambda: __import__("numpy")),
+                       ("PyExifTool", lambda: __import__("exiftool"))):
+        try:
+            module = load()
+            version = getattr(module, "__version__", "?")
+            if name.startswith("rawpy"):
+                version += f" / LibRaw {module.libraw_version}"
+            if name == "pillow-heif":
+                libheif = module.libheif_version
+                version += f" / libheif {libheif() if callable(libheif) else libheif}"
+            line(name, version)
+        except Exception as e:  # report every missing library, not just the first
+            line(name, f"{type(e).__name__}: {e}", ok=False)
+    return 1 if problems else 0
 
 
 def check_folder(root: Path) -> None:
@@ -160,6 +203,8 @@ def report_text(shoot: Shoot, cat: Catalog, run: IngestResult | None, workers: i
 
 def main() -> int:
     args = parse_args()
+    if args.selfcheck:
+        return selfcheck()
     root = clean_path(args.folder)
     check_folder(root)
     shoot = shoot_for(root)

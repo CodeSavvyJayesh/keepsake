@@ -3,18 +3,37 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 # --- Folders --------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]      # C:\KeepSake
+FROZEN = bool(getattr(sys, "frozen", False))     # running as the packaged app (PyInstaller)
+
+
+def app_data_dir(platform: str = sys.platform, home: Path | None = None,
+                 env: dict | None = None) -> Path:
+    """Where the packaged app keeps its catalog and cache: the user's own app-data folder,
+    never inside the app itself (which is read-only once installed)."""
+    home = home or Path.home()
+    env = os.environ if env is None else env
+    if platform == "darwin":
+        return home / "Library" / "Application Support" / "KeepSake"
+    if platform.startswith("win"):
+        return Path(env.get("LOCALAPPDATA") or home / "AppData" / "Local") / "KeepSake"
+    return home / ".keepsake"
+
+
 # KEEPSAKE_DATA / KEEPSAKE_DOCS move these elsewhere (used by the tests)
-DATA_DIR = Path(os.environ.get("KEEPSAKE_DATA") or ROOT / "data")   # never in Git
+DATA_DIR = Path(os.environ.get("KEEPSAKE_DATA")
+                or (app_data_dir() if FROZEN else ROOT / "data"))           # never in Git
 TEST_PHOTOS = DATA_DIR / "test_photos"
 WEDDINGS_DIR = DATA_DIR / "weddings"
 SCRATCH_DIR = DATA_DIR / "scratch"
 CACHE_DIR = DATA_DIR / "cache"                   # previews + catalog: on this laptop, never the shoot drive
 TOOLS_DIR = ROOT / "tools"                       # ExifTool is downloaded here
-DOCS_DIR = Path(os.environ.get("KEEPSAKE_DOCS") or ROOT / "docs")
+DOCS_DIR = Path(os.environ.get("KEEPSAKE_DOCS")
+                or (DATA_DIR / "reports" if FROZEN else ROOT / "docs"))
 
 # --- File types -----------------------------------------------------------
 RAW_TYPES = frozenset({

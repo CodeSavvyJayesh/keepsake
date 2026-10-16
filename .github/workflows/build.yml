@@ -1,0 +1,82 @@
+# KeepSake: test on Windows and Mac, then build the engine as a Mac installer (.dmg).
+#
+# Runs by itself when this file or requirements.txt changes, and any time from GitHub:
+# Actions tab -> "Build and test" -> Run workflow. (Not on every push: Mac build minutes
+# count 10x against the free GitHub allowance for private repos.)
+# The .dmg is under the run's "Artifacts" for 14 days.
+name: Build and test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build.yml"
+      - "requirements.txt"
+
+jobs:
+  test:
+    name: Tests on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install libraries
+        run: python -m pip install -r requirements.txt
+      - name: Run the tests
+        run: python -m pytest
+
+  mac-dmg:
+    name: Mac installer (.dmg)
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install libraries and PyInstaller
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build the engine as one app folder
+        run: >
+          pyinstaller --noconfirm --clean --onedir --name keepsake-ingest --paths .
+          --collect-all rawpy --collect-all pillow_heif --exclude-module cv2
+          scripts/ingest.py
+
+      - name: Check the built app loads every library
+        run: dist/keepsake-ingest/keepsake-ingest --selfcheck
+
+      - name: Make the .dmg
+        run: |
+          # hdiutil sometimes reports "Resource busy" on GitHub's Macs: try up to 3 times
+          for attempt in 1 2 3; do
+            hdiutil create -volname KeepSake -srcfolder dist/keepsake-ingest -ov -format UDZO \
+              dist/KeepSake-engine-mac.dmg && break
+            sleep 10
+          done
+          test -f dist/KeepSake-engine-mac.dmg
+
+      - name: Ingest a sample shoot with the app inside the .dmg
+        run: |
+          python scripts/make_sample_shoot.py "$RUNNER_TEMP/Sample Wedding/Raw"
+          hdiutil attach dist/KeepSake-engine-mac.dmg -mountpoint "$RUNNER_TEMP/dmg" -nobrowse
+          KEEPSAKE_DATA="$RUNNER_TEMP/keepsake-data" "$RUNNER_TEMP/dmg/keepsake-ingest" \
+            "$RUNNER_TEMP/Sample Wedding/Raw" --workers 2 | tr '\r' '\n' | tee ingest.txt
+          hdiutil detach "$RUNNER_TEMP/dmg"
+          grep -q "done 29, failed 1" ingest.txt
+          echo "Packaged app ingested the sample shoot correctly."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KeepSake-engine-mac
+          path: dist/KeepSake-engine-mac.dmg
+          retention-days: 14

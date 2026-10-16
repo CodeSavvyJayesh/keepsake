@@ -47,3 +47,20 @@ def test_wedding_folder_with_selected_copies_is_refused(tmp_path):
     r = ks_ingest(tmp_path, wedding)
     assert r.returncode == 1 and "selected copies" in r.stdout
     assert "Raw image's" in r.stdout                          # tells her the right command
+
+
+def test_selfcheck_loads_every_library(tmp_path):
+    import pytest
+    pytest.importorskip("rawpy")
+    pytest.importorskip("pillow_heif")
+    r = ks_ingest(tmp_path, "--selfcheck")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "LibRaw" in r.stdout and "libheif" in r.stdout and "FAIL" not in r.stdout
+
+
+def test_packaged_app_keeps_data_outside_the_app():
+    from engine.config import app_data_dir
+    home = Path("/Users/studio")
+    assert app_data_dir("darwin", home, {}) == home / "Library" / "Application Support" / "KeepSake"
+    assert app_data_dir("win32", home, {"LOCALAPPDATA": "C:/Users/s/AppData/Local"}) == \
+        Path("C:/Users/s/AppData/Local") / "KeepSake"

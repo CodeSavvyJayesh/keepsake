@@ -55,6 +55,18 @@ files are decoded at reduced size. RAW + JPEG saved together count as one photo.
 Options: `--workers N`, `--limit N` (try a few), `--redo` (make every copy again).
 Ctrl+C stops safely; the same command continues where it stopped.
 
+## Mac build (GitHub Actions)
+
+`.github/workflows/build.yml` runs the tests on Windows and Mac, builds the engine into a Mac
+app with PyInstaller, packs it into `KeepSake-engine-mac.dmg`, and ingests a sample shoot with
+the app inside the .dmg. It runs when the workflow or `requirements.txt` changes, or from
+GitHub: Actions -> Build and test -> Run workflow. The .dmg is under the run's Artifacts.
+
+On a Mac: open the .dmg, then in Terminal run `/Volumes/KeepSake/keepsake-ingest --selfcheck`.
+The build is not signed yet, so macOS may block it the first time: System Settings ->
+Privacy & Security -> Open Anyway. The packaged app keeps its data in
+`~/Library/Application Support/KeepSake`.
+
 ## Folder layout
 
 ```
