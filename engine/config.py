@@ -32,6 +32,7 @@ WEDDINGS_DIR = DATA_DIR / "weddings"
 SCRATCH_DIR = DATA_DIR / "scratch"
 CACHE_DIR = DATA_DIR / "cache"                   # previews + catalog: on this laptop, never the shoot drive
 TOOLS_DIR = ROOT / "tools"                       # ExifTool is downloaded here
+MODELS_DIR = TOOLS_DIR / "models"                # AI model files (ks models), not in Git
 DOCS_DIR = Path(os.environ.get("KEEPSAKE_DOCS")
                 or (DATA_DIR / "reports" if FROZEN else ROOT / "docs"))
 

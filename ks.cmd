@@ -22,6 +22,9 @@ if /i "%CMD%"=="previews" goto previews
 if /i "%CMD%"=="edge" goto edge
 if /i "%CMD%"=="match" goto match
 if /i "%CMD%"=="ingest" goto ingest
+if /i "%CMD%"=="quality" goto quality
+if /i "%CMD%"=="faces" goto faces
+if /i "%CMD%"=="models" goto models
 if /i "%CMD%"=="test" goto test
 echo Unknown command: %CMD%
 goto help
@@ -54,6 +57,18 @@ exit /b %errorlevel%
 "%PY%" "%ROOT%scripts\ingest.py" %2 %3 %4 %5 %6 %7 %8 %9
 exit /b %errorlevel%
 
+:quality
+"%PY%" "%ROOT%scripts\quality.py" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
+:faces
+"%PY%" "%ROOT%scripts\faces.py" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
+:models
+"%PY%" "%ROOT%scripts\models.py" %2 %3
+exit /b %errorlevel%
+
 :test
 "%PY%" -m pytest --rootdir "%ROOT%." "%ROOT%tests"
 exit /b %errorlevel%
@@ -69,6 +84,9 @@ echo   ks edge               create the photo folders and edge-case files
 echo   ks match "folder"     match a wedding's selected photos to the originals
 echo   ks ingest "folder"    read a whole shoot once: catalog, previews, thumbnails
 echo   ks ingest "folder" --bench   speed test: best number of workers for this drive
+echo   ks quality "folder"   measure sharpness and exposure of an ingested shoot
+echo   ks faces "folder"     find faces; read eyes, smiles and head pose
+echo   ks models             download the AI model files (faces, eyes)
 echo   ks test               run the automatic tests
 echo.
 echo Without a folder, list and previews use data\test_photos.

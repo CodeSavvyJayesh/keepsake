@@ -82,6 +82,36 @@ def match_selected(originals: Iterable[Path], selected: Iterable[Path],
     return result
 
 
+def load_label_csv(csv_path: Path, shoot_root: Path) -> dict[str, int]:
+    """The studio's choices from a ks match file, keyed like the catalog (relative to the shoot).
+
+    The file lists originals relative to the wedding folder ('Raw image's\\Day 1\\DSC_1.JPG');
+    only those under the shoot folder are kept, with that first part removed.
+    """
+    import csv
+    wanted = shoot_root.name.lower()
+    out: dict[str, int] = {}
+    with open(csv_path, encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            parts = row["original"].replace("\\", "/").split("/", 1)
+            if len(parts) == 2 and parts[0].lower() == wanted:
+                out[parts[1]] = int(row["selected"])
+    return out
+
+
+def attach_labels(catalog, shoot_root: Path) -> tuple[int, str] | None:
+    """Load the wedding's ks match file (if there is one) into the shoot's catalog.
+
+    Returns (photos labelled, file name), or None when the studio's choices are not known.
+    """
+    from .config import DATA_DIR
+    from .ingest import slug
+    label_file = DATA_DIR / "labels" / f"{slug(shoot_root.parent.name)}.csv"
+    if not label_file.exists():
+        return None
+    return catalog.save_labels(load_label_csv(label_file, shoot_root), label_file.name), label_file.name
+
+
 def _base(path: Path) -> str:
     """The name up to the first dot: 'DSC_0342.JPGG.JPG' -> 'dsc_0342'."""
     return path.name.split(".", 1)[0].lower()

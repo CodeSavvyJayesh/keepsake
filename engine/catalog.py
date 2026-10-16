@@ -56,7 +56,53 @@ CREATE TABLE IF NOT EXISTS photos (
 );
 CREATE INDEX IF NOT EXISTS photos_status ON photos(status);
 CREATE INDEX IF NOT EXISTS photos_taken ON photos(taken_s);
+
+-- Phase 2: picture-quality measurements (see engine/quality.py), one row per photo
+CREATE TABLE IF NOT EXISTS quality (
+    id            INTEGER PRIMARY KEY REFERENCES photos(id),
+    version       INTEGER NOT NULL,
+    ok            INTEGER NOT NULL,       -- 0 = the analysis copy could not be read
+    error         TEXT,
+    sharp_global  REAL, sharp_peak REAL, peak_contrast REAL, noise REAL, motion REAL,
+    luma_mean     REAL, luma_p01 REAL, luma_p99 REAL, clip_low REAL, clip_high REAL,
+    sharp_rel     REAL,                   -- sharpness against the same camera body (robust z)
+    luma_rel      REAL                    -- brightness against the same event (robust z)
+);
+
+-- Phase 2b: faces (see engine/faces.py). face_scan has one row per photo looked at,
+-- faces one row per face found (n = 0 is the largest face in the photo).
+CREATE TABLE IF NOT EXISTS face_scan (
+    id         INTEGER PRIMARY KEY REFERENCES photos(id),
+    version    INTEGER NOT NULL,
+    ok         INTEGER NOT NULL,
+    error      TEXT,
+    faces      INTEGER,                -- faces found
+    eyes_read  INTEGER                 -- 1 when the eye reader (MediaPipe) was available
+);
+CREATE TABLE IF NOT EXISTS faces (
+    photo_id   INTEGER NOT NULL REFERENCES photos(id),
+    n          INTEGER NOT NULL,
+    x REAL, y REAL, w REAL, h REAL,    -- box in the analysis copy, pixels
+    score      REAL,                   -- how sure YuNet is that this is a face
+    rel_w      REAL,                   -- face width / photo's long side
+    sharp      REAL, contrast REAL,    -- sharpness and detail of the middle of the face
+    read       INTEGER,                -- 1 = eyes and expression were read
+    blink_l REAL, blink_r REAL,        -- 0 = eye wide open, 1 = shut (the person's left/right)
+    squint REAL, look_down REAL, smile REAL, jaw_open REAL,
+    yaw REAL, pitch REAL, roll REAL,   -- head turn, nod, tilt in degrees
+    PRIMARY KEY (photo_id, n)
+);
+
+-- The studio's own choices, when known (from ks match): 1 = selected, 0 = not selected
+CREATE TABLE IF NOT EXISTS labels (
+    id        INTEGER PRIMARY KEY REFERENCES photos(id),
+    selected  INTEGER NOT NULL,
+    source    TEXT
+);
 """
+
+QUALITY_COLUMNS = ("sharp_global", "sharp_peak", "peak_contrast", "noise", "motion",
+                   "luma_mean", "luma_p01", "luma_p99", "clip_low", "clip_high")
 
 RESULT_COLUMNS = ("status", "error", "camera", "serial", "body", "lens", "taken", "taken_s",
                   "tz", "width", "height", "orientation", "iso", "shutter", "aperture", "focal",
@@ -180,6 +226,83 @@ class Catalog:
                 sets = ", ".join(f"{c} = ?" for c in cols)
                 self.db.execute(f"UPDATE photos SET {sets} WHERE id = ?",
                                 [r[c] for c in cols] + [r["id"]])
+
+    # --- Phase 2: quality ---------------------------------------------------------------
+    def quality_pending(self, version: int) -> list[tuple[int, str]]:
+        """(id, event) of read photos with no quality row of this version yet."""
+        return list(self.db.execute(
+            "SELECT p.id, p.folder FROM photos p LEFT JOIN quality q ON q.id = p.id "
+            "WHERE p.status = 'done' AND (q.id IS NULL OR q.version < ?) ORDER BY p.id",
+            (version,)))
+
+    def save_quality(self, results: list[dict], version: int) -> None:
+        cols = ("id", "version", "ok", "error") + QUALITY_COLUMNS
+        with self.db:
+            self.db.executemany(
+                f"INSERT OR REPLACE INTO quality ({', '.join(cols)}) "
+                f"VALUES ({', '.join('?' for _ in cols)})",
+                [[r["id"], version, int(r.get("ok", False)), r.get("error")]
+                 + [r.get(c) for c in QUALITY_COLUMNS] for r in results])
+
+    def quality_rows(self) -> list[dict]:
+        """Every measured photo with its body and event, for the relative scores."""
+        cur = self.db.execute(
+            "SELECT q.id, COALESCE(p.body, p.camera, ''), p.folder, "
+            + ", ".join(f"q.{c}" for c in QUALITY_COLUMNS)
+            + " FROM quality q JOIN photos p ON p.id = q.id WHERE q.ok = 1 AND p.status = 'done'")
+        rows = []
+        for r in cur:
+            d = dict(zip(QUALITY_COLUMNS, r[3:]))
+            d.update(id=r[0], body=r[1], event=(r[2] or "").split("/")[0])
+            rows.append(d)
+        return rows
+
+    def save_relative(self, scores: dict[int, dict]) -> None:
+        with self.db:
+            self.db.executemany("UPDATE quality SET sharp_rel = ?, luma_rel = ? WHERE id = ?",
+                                [(s.get("sharp_rel"), s.get("luma_rel"), pid)
+                                 for pid, s in scores.items()])
+
+    def faces_pending(self, version: int, eyes_available: bool) -> list[int]:
+        """Read photos not yet scanned for faces with this version (or scanned before the eye
+        reader was installed, when it is now)."""
+        sql = ("SELECT p.id FROM photos p LEFT JOIN face_scan s ON s.id = p.id "
+               "WHERE p.status = 'done' AND (s.id IS NULL OR s.version < ? OR s.ok = 0"
+               + (" OR s.eyes_read = 0" if eyes_available else "") + ") ORDER BY p.id")
+        return [r[0] for r in self.db.execute(sql, (version,))]
+
+    def save_faces(self, results: list[dict], version: int) -> None:
+        from .faces import FACE_COLUMNS
+        cols = ", ".join(FACE_COLUMNS)
+        marks = ", ".join("?" for _ in FACE_COLUMNS)
+        with self.db:
+            for r in results:
+                self.db.execute("DELETE FROM faces WHERE photo_id = ?", (r["id"],))
+                self.db.executemany(
+                    f"INSERT INTO faces (photo_id, n, {cols}) VALUES (?, ?, {marks})",
+                    [[r["id"], n] + [f.get(c) for c in FACE_COLUMNS]
+                     for n, f in enumerate(r.get("faces", []))])
+                self.db.execute(
+                    "INSERT OR REPLACE INTO face_scan (id, version, ok, error, faces, eyes_read) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (r["id"], version, int(r.get("ok", False)), r.get("error"),
+                     len(r.get("faces", [])), int(bool(r.get("eyes")))))
+
+    def save_labels(self, selected_by_path: dict[str, int], source: str) -> int:
+        """Store the studio's choices against catalog photos; returns how many matched."""
+        ids = dict(self.db.execute("SELECT path, id FROM photos"))
+        rows = [(ids[p], s, source) for p, s in selected_by_path.items() if p in ids]
+        with self.db:
+            self.db.execute("DELETE FROM labels")
+            self.db.executemany("INSERT INTO labels (id, selected, source) VALUES (?, ?, ?)", rows)
+        return len(rows)
+
+    def labelled_quality(self) -> list[dict]:
+        cur = self.db.execute(
+            "SELECT l.selected, q.sharp_rel, q.luma_rel, " + ", ".join(f"q.{c}" for c in QUALITY_COLUMNS)
+            + " FROM labels l JOIN quality q ON q.id = l.id WHERE q.ok = 1")
+        names = ("selected", "sharp_rel", "luma_rel") + QUALITY_COLUMNS
+        return [dict(zip(names, r)) for r in cur]
 
     # --- reports -------------------------------------------------------------------
     def counts(self) -> Counter:

@@ -64,3 +64,24 @@ def test_packaged_app_keeps_data_outside_the_app():
     assert app_data_dir("darwin", home, {}) == home / "Library" / "Application Support" / "KeepSake"
     assert app_data_dir("win32", home, {"LOCALAPPDATA": "C:/Users/s/AppData/Local"}) == \
         Path("C:/Users/s/AppData/Local") / "KeepSake"
+
+
+def test_quality_command_measures_and_reports_against_labels(tmp_path):
+    import csv
+    root = tmp_path / "Sharma Wedding" / "Raw"
+    for i in range(6):
+        camera_jpeg(root / "Haldi" / f"DSC_000{i}.JPG")
+    assert ks_ingest(tmp_path, root, "--workers", 1).returncode == 0
+    labels = tmp_path / "data" / "labels"
+    labels.mkdir(parents=True)
+    with open(labels / "sharma_wedding.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["original", "selected", "selected_copy", "raw_event", "selected_event"])
+        for i in range(6):
+            w.writerow([f"Raw\\Haldi\\DSC_000{i}.JPG", int(i < 2), "", "Haldi", ""])
+    env = dict(os.environ, KEEPSAKE_DATA=str(tmp_path / "data"), PYTHONUTF8="1")
+    r = subprocess.run([sys.executable, str(SCRIPT.parent / "quality.py"), str(root), "--workers", "1"],
+                       env=env, capture_output=True, text=True, encoding="utf-8", timeout=180)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "6 photos labelled" in r.stdout and "Photos measured     6" in r.stdout
+    assert "sharpness vs same camera" in r.stdout

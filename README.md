@@ -4,7 +4,7 @@ AI photo culling for wedding studios. KeepSake reads a whole shoot straight from
 sorts it into **Selected** and **Removed**, explains every removal, and lets the editor
 review and move any photo before anything is applied. Originals are never changed.
 
-Status: **Phase 1 - ingest engine.** (Phase 0, setup and test data, is complete.)
+Status: **Phase 2 - quality checks.** (Phases 0 and 1 are complete.)
 
 ## First-time setup (Windows)
 
@@ -32,6 +32,9 @@ Run these inside `C:\KeepSake` (in PowerShell type `.\ks`, in Command Prompt jus
 | `ks match "folder"` | Matches a wedding's selected photos to the originals; saves labels to `data\labels` |
 | `ks ingest "folder"` | Reads a whole shoot once: catalog, analysis copies, thumbnails (resumes if stopped) |
 | `ks ingest "folder" --bench` | Speed test on this drive; `ks ingest` then uses the best number of workers |
+| `ks quality "folder"` | Measures sharpness and exposure of an ingested shoot; compares with the studio's picks if known |
+| `ks faces "folder"` | Finds every face; reads eyes (open/closed), smile and head turn; writes a review page |
+| `ks models` | Downloads the AI model files (face finder, eye and smile reader) into `tools\models` |
 | `ks test` | Runs the automatic tests |
 
 Without a folder, `list` and `previews` use `data\test_photos`.
