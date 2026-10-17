@@ -59,3 +59,137 @@ def test_match_with_separate_raw_and_selected_folders(tmp_path):
     assert len(rows) == 8 and sum(int(x["selected"]) for x in rows) == 1
     assert load_label_csv(out, raw) == {f"{p}_{i:04d}.JPG": int(p == "RBP" and i == 1)
                                         for p in ("RBP", "DSC") for i in range(4)}
+
+
+def test_renamed_picks_matched_by_camera_and_capture_time():
+    from engine.labels import match_by_capture
+    originals = {f"CM2_{i}.JPG": ("068221000207", "Canon EOS R5", 1000 + i * 0.37) for i in range(50)}
+    originals.update({f"TSV_{i}.JPG": ("7601113", "NIKON Z 9", 1000.01 + i * 0.05) for i in range(50)})  # 20 fps burst
+    originals["DJI_1.JPG"] = (None, "DJI FC8282", 5000.0)
+    selected = {"RBP_1.jpg": ("068221000207", "Canon EOS R5", 1000 + 7 * 0.37),       # renamed export
+                "RBP_2.jpg": ("7601113", "NIKON Z 9", 1000.01 + 12 * 0.05),            # one frame of the burst
+                "RBP_3.jpg": (None, "DJI FC8282", 5000.0),                          # no serial: camera name
+                "RBP_4.jpg": ("7601113", "NIKON Z 9", 1001.0)}                      # second only: 20 frames fit
+    found, how = match_by_capture(selected, originals)
+    assert found == {"RBP_1.jpg": "CM2_7.JPG", "RBP_2.jpg": "TSV_12.JPG", "RBP_3.jpg": "DJI_1.JPG"}
+    assert how["camera + capture time"] == 3
+
+
+def test_a_camera_clock_corrected_in_lightroom_is_found():
+    from engine.labels import match_by_capture
+    originals = {f"DSC_{i}.JPG": ("7600802", "NIKON Z 9", 1000 + i * 7.13) for i in range(40)}
+    selected = {f"RBP_{i}.jpg": ("7600802", "NIKON Z 9", 1000 + i * 7.13 + 3600) for i in range(0, 40, 4)}
+    found, how = match_by_capture(selected, originals)
+    assert found == {f"RBP_{i}.jpg": f"DSC_{i}.JPG" for i in range(0, 40, 4)}
+    assert how["camera + capture time (clock corrected)"] == 10
+
+
+def test_match_script_falls_back_to_capture_time(tmp_path, monkeypatch):
+    import match_selected as script
+    from engine.catalog import Catalog
+    from engine.ingest import shoot_for
+    raw = tmp_path / "D" / "All Raw images" / "Ansh & Anjali"
+    sel = tmp_path / "E" / "All Selected images" / "Ansh & Anjali"
+    raw.mkdir(parents=True)
+    sel.mkdir(parents=True)
+    for i in range(6):
+        (raw / f"CM2_{i}.JPG").write_bytes(os.urandom(50))
+    (sel / "RBP_1215.jpg").write_bytes(b"edited export")
+    monkeypatch.setattr(script, "LABELS_DIR", tmp_path / "labels")
+    shoot = shoot_for(raw, cache_dir=tmp_path / "cache")
+    with Catalog(shoot.db) as cat:
+        for i in range(6):
+            cat.db.execute("INSERT INTO photos (path, folder, kind, bytes, mtime_ms, status, serial, camera, taken_s) "
+                           "VALUES (?, '', 'jpeg', 50, 1, 'done', '068221000207', 'Canon EOS R5', ?)",
+                           (f"CM2_{i}.JPG", 1000.0 + i * 0.4))
+        cat.db.commit()
+    import engine.ingest
+    monkeypatch.setattr(engine.ingest, "shoot_for", lambda r, cache_dir=None: shoot)
+    monkeypatch.setattr(script, "capture_of", lambda paths, label: {p: ("068221000207", "Canon EOS R5", 1001.2)
+                                                                   for p in paths})
+    monkeypatch.setattr(sys, "argv", ["match_selected.py", str(raw), str(sel)])
+    assert script.main() == 0
+    rows = list(csv.DictReader(open(tmp_path / "labels" / f"{shoot.name}.csv", encoding="utf-8")))
+    assert [r["original"] for r in rows if r["selected"] == "1"] == ["Ansh & Anjali/CM2_3.JPG"]
+
+
+def test_a_photo_twice_in_the_raw_folder_is_marked_twice():
+    from engine.labels import match_by_capture
+    originals = {"DSC_1735.JPG": ("7603823", "NIKON Z 8", 2000.86, 9000),
+                 "untitled folder 2/DSC_1735.JPG": ("7603823", "NIKON Z 8", 2000.86, 9000),   # same file again
+                 "L1000.JPG": ("5215384", "LEICA Q", 3000.0, 100), "L1001.JPG": ("5215384", "LEICA Q", 3000.0, 120)}
+    found, _ = match_by_capture({"RBP_1718.jpg": ("7603823", "NIKON Z 8", 2000.86),
+                                 "RBP_9.jpg": ("5215384", "LEICA Q", 3000.0)}, originals)
+    assert found == {"RBP_1718.jpg": ("DSC_1735.JPG", "untitled folder 2/DSC_1735.JPG")}   # Leica: 2 frames, unsure
+
+
+def test_repick_folder_is_one_stretch_with_a_hidden_key(tmp_path, monkeypatch):
+    import testset as script
+    from engine.catalog import Catalog
+    from engine.ingest import shoot_for
+    root = tmp_path / "D" / "All Raw images" / "Rishi & Aashi"
+    root.mkdir(parents=True)
+    shoot = shoot_for(root, cache_dir=tmp_path / "cache")
+    with Catalog(shoot.db) as cat:
+        for i in range(1, 121):
+            body = ["A", "B", "C"][i % 3]
+            (root / f"IMG_{i:04d}.JPG").write_bytes(os.urandom(40))
+            cat.db.execute("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status, body, taken_s) "
+                           "VALUES (?, ?, '', 'jpeg', 40, 1, 'done', ?, ?)", (i, f"IMG_{i:04d}.JPG", body, i * 10.0))
+            cat.db.execute("INSERT INTO labels (id, selected) VALUES (?, ?)", (i, int(i % 10 == 0)))
+        cat.db.executemany("INSERT INTO clocks (body, offset, support) VALUES (?, 0, 9)", [("A",), ("B",), ("C",)])
+        cat.db.commit()
+    monkeypatch.setattr(script, "shoot_for", lambda r: shoot)
+    monkeypatch.setattr(script, "attach_labels", lambda c, r: None)
+    monkeypatch.setattr(script, "REPICK_DIR", tmp_path / "repick")
+    out = tmp_path / "laptop" / "Re-pick test"
+    monkeypatch.setattr(sys, "argv", ["testset.py", str(root), "50", str(out)])
+    assert script.main() == 0
+    copies = sorted(p.name for p in out.glob("*.JPG"))
+    assert len(copies) == 50 and copies[0].startswith("0001_")
+    key = list(csv.DictReader(open(tmp_path / "repick" / f"{shoot.name}.csv", encoding="utf-8")))
+    assert len(key) == 50 and 3 <= sum(int(r["studio_selected"]) for r in key) <= 7
+    assert not any("select" in p.name.lower() for p in out.iterdir())      # nothing hints at the old picks
+
+
+def test_small_copies_for_whatsapp(tmp_path):
+    from PIL import Image
+    from testset import save_small
+    src = tmp_path / "big.jpg"
+    Image.new("RGB", (6000, 4000), (200, 100, 50)).save(src, quality=95)
+    save_small(src, tmp_path / "small.jpg")
+    assert Image.open(tmp_path / "small.jpg").size == (2048, 1365)
+
+
+def test_blind_choice_on_the_test_photos(tmp_path, monkeypatch):
+    import json
+    import testcull as script
+    from engine.catalog import Catalog
+    from engine.ingest import shoot_for
+    root = tmp_path / "D" / "Rishi & Aashi"
+    shoot = shoot_for(root, cache_dir=tmp_path / "cache")
+    folder = tmp_path / "Re-pick test"
+    folder.mkdir()
+    repick = tmp_path / "repick"
+    repick.mkdir()
+    with Catalog(shoot.db) as cat, open(repick / f"{shoot.name}.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["copy", "original", "photo_id", "studio_selected"])
+        for i in range(1, 101):
+            name = f"{i:04d}_IMG_{i}.JPG"
+            (folder / name).write_bytes(b"x")
+            w.writerow([name, f"IMG_{i}.JPG", i, int(i <= 10)])
+            cat.db.execute("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status) VALUES (?, ?, '', 'jpeg', 1, 1, 'done')",
+                           (i, f"IMG_{i}.JPG"))
+        cat.save_cull([(i, "selected", 0, 100.0 - i, None, None) for i in range(1, 101)],
+                      {"mode": "other weddings", "trained_on": ["another_wedding"]})
+    (repick / f"{shoot.name}.json").write_text(json.dumps({"folder": str(folder), "photos": 100}))
+    monkeypatch.setattr(script, "shoot_for", lambda r: shoot)
+    monkeypatch.setattr(script, "REPICK_DIR", repick)
+    monkeypatch.setattr(script, "OUTPUT_ROOT", tmp_path / "out")
+    monkeypatch.setattr(script, "labelled_shoots", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", ["testcull.py", str(root)])
+    assert script.main() == 0
+    out = tmp_path / "out" / "KeepSake choice - Rishi & Aashi"
+    assert len(list((out / "Selected").iterdir())) == 10 and len(list((out / "Removed").iterdir())) == 90
+    assert "Chosen by both              10" in (repick / f"{shoot.name}_keepsake.txt").read_text()

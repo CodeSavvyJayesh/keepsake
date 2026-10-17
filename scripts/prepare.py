@@ -10,7 +10,7 @@ per wedding of the studio's picks; they are paired by the couple's names ('Twink
 (Dubai)' pairs with 'twinkle n jacky'). A wedding already prepared under another folder name
 is skipped, so it is never learned from twice.
 
-For each wedding:  match (when the picks are known) -> ingest -> quality -> faces -> clip -> groups
+For each wedding:  ingest -> match (when the picks are known) -> quality -> faces -> clip -> groups
 Every step carries on where it stopped, so after a stop or a disconnected drive the same
 command can simply be run again. If one wedding fails, the others still run. A log of
 everything is saved in data\reports.
@@ -117,7 +117,8 @@ def jobs_from_args(argv: list[str]) -> tuple[list[tuple[str, Path, list[tuple[st
             if done_as:
                 notes.append(f"{photos.name}: skipped, already prepared as {done_as}")
                 continue
-            steps = ([("match_selected", [photos, picks])] if picks else []) + [(s, [photos]) for s in STEPS]
+            steps = [("ingest", [photos])] + ([("match_selected", [photos, picks])] if picks else []) \
+                + [(s, [photos]) for s in STEPS[1:]]
             label = f"{photos}" + (f"  (studio picks: {picks})" if picks else "  (no studio picks found)")
             jobs.append((label, photos, steps))
         return jobs, notes
@@ -126,7 +127,8 @@ def jobs_from_args(argv: list[str]) -> tuple[list[tuple[str, Path, list[tuple[st
             notes.append(f"{folder}: folder not found (is the drive connected?)")
             continue
         wedding, photos = plan(folder)
-        steps = ([("match_selected", [wedding])] if wedding else []) + [(s, [photos]) for s in STEPS]
+        steps = [("ingest", [photos])] + ([("match_selected", [wedding])] if wedding else []) \
+            + [(s, [photos]) for s in STEPS[1:]]
         jobs.append((f"{folder}" + ("  (studio picks: matched first)" if wedding else ""), photos, steps))
     return jobs, notes
 

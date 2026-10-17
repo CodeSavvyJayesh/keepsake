@@ -1,6 +1,7 @@
 r"""Phase 3: how well KeepSake has learned the studio's taste, tested honestly.
 
     ks evaluate "E:\Sharma Wedding\Raw" ["F:\Mehta Wedding\Raw" ...]
+    ks evaluate --all          every prepared wedding with the studio's choices
 
 Every shoot must be ingested and analysed (ks quality, ks faces, ks clip, ks groups) and have
 the studio's choices (ks match). With several weddings, each is tested by a model trained only
@@ -40,21 +41,33 @@ def table(name: str, scores) -> list[str]:
 
 def main() -> int:
     folders = [clean_path(a) for a in sys.argv[1:] if not a.startswith("--")]
+    if "--all" in sys.argv:
+        from engine.config import CACHE_DIR
+        from engine.cull import labelled_shoots
+        folders = labelled_shoots(CACHE_DIR)
+        if not folders:
+            print("No prepared wedding has the studio's choices yet. Run ks prepare first.")
+            return 1
     if not folders:
         print('Give one or more shoot folders, for example:  ks evaluate "E:\\Sharma Wedding\\Raw"')
         return 1
     start = time.perf_counter()
     datasets = []
     for root in folders:
-        shoot = shoot_for(root)
-        if not shoot.db.exists():
-            print(f"Not ingested yet: {root}")
-            return 1
-        with Catalog(shoot.db) as cat:
-            attach_labels(cat, root)
-            ds = photo_features(cat, shoot.name)
+        if root.name == "catalog.db":                 # --all: a prepared shoot, labels already attached
+            db, name = root, root.parent.name
+        else:
+            shoot = shoot_for(root)
+            db, name = shoot.db, shoot.name
+            if not db.exists():
+                print(f"Not ingested yet: {root}")
+                return 1
+        with Catalog(db) as cat:
+            if root.name != "catalog.db":
+                attach_labels(cat, root)
+            ds = photo_features(cat, name)
         known = int((ds.y >= 0).sum())
-        print(f"{shoot.name}: {len(ds.ids):,} photos, {known:,} with the studio's choice, "
+        print(f"{name}: {len(ds.ids):,} photos, {known:,} with the studio's choice, "
               f"{int((ds.y == 1).sum()):,} picks" + ("" if ds.clip is not None else "  (no CLIP yet: run ks clip)"))
         if known:
             datasets.append(ds)

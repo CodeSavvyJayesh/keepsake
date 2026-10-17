@@ -82,6 +82,104 @@ def match_selected(originals: Iterable[Path], selected: Iterable[Path],
     return result
 
 
+Capture = tuple   # (body serial or None, camera name or None, capture time in seconds or None)
+
+
+def _norm(text) -> str | None:
+    return str(text).strip().lower() or None if text else None
+
+
+def match_by_capture(selected: dict, originals: dict, min_support: int = 5) -> tuple[dict, Counter]:
+    """Match renamed copies to originals by camera and capture time, which edited exports keep.
+
+    selected / originals: {key: (serial, camera, taken_s)}; an original may add its size in bytes
+    as a 4th value, so that two byte-identical copies of one photo in the Raw folder (the same
+    frame twice) are both marked, instead of left unsure. Studios often rename their picks on
+    export (RBP_1215.jpg is CM2_1758.JPG), but the camera's serial number and the capture time,
+    to the hundredth of a second, travel with the file. Tried in order:
+      1. same camera body (serial, else camera name) and the same time to 1/100 s
+      2. the same, after a whole-camera clock shift (the studio corrected a camera's clock in
+         Lightroom): the shift is the one most copies agree on, at least `min_support` of them
+      3. copies without the fraction of a second: same body and second, if only one original fits
+    Returns ({selected key: original key, or a tuple of identical copies}, {method: count});
+    anything unsure stays unmatched.
+    """
+    size = {o: (v[3] if len(v) > 3 else None) for o, v in originals.items()}
+
+    def one(hits):
+        """The single original these hits point to (a tuple when they are identical copies)."""
+        hits = list(dict.fromkeys(hits))
+        if len(hits) == 1:
+            return hits[0]
+        sizes = {size[h] for h in hits}
+        return tuple(hits) if len(sizes) == 1 and None not in sizes else None
+
+    by_body: dict[str, list] = defaultdict(list)
+    exact: dict[tuple, list] = defaultdict(list)
+    second: dict[tuple, list] = defaultdict(list)
+    for o, (serial, camera, t, *_) in originals.items():
+        if t is None:
+            continue
+        for body in {_norm(serial), _norm(camera)} - {None}:
+            by_body[body].append((t, o))
+            exact[(body, round(t * 100))].append(o)
+            second[(body, int(t))].append(o)
+
+    def body_of(serial, camera):
+        for body in (_norm(serial), _norm(camera)):
+            if body in by_body:
+                return body
+        return None
+
+    out, how = {}, Counter()
+    rest = []
+    for s, (serial, camera, t) in selected.items():
+        body = body_of(serial, camera)
+        hits = exact.get((body, round(t * 100)), []) if body and t is not None else []
+        if hits and one(hits) is not None:
+            out[s] = one(hits)
+            how["camera + capture time"] += 1
+        elif body and t is not None:
+            rest.append((s, body, t))
+
+    # 2. a camera's clock corrected after the shoot: one shift for all its photos
+    shifts: dict[str, float] = {}
+    by_rest_body = defaultdict(list)
+    for s, body, t in rest:
+        by_rest_body[body].append(t)
+    for body, times in by_rest_body.items():
+        if len(times) < min_support:
+            continue
+        votes = Counter()
+        for t in times:
+            frac = round(t % 1, 2)
+            for to, _ in by_body[body]:
+                if round(to % 1, 2) == frac and frac and abs(t - to) < 2 * 86400:
+                    votes[round(t - to, 2)] += 1
+        if votes:
+            (best, n), *others = votes.most_common(2) + [(None, 0)]
+            if n >= min_support and n >= 3 * others[0][1]:
+                shifts[body] = best
+    still = []
+    for s, body, t in rest:
+        if body in shifts:
+            hits = exact.get((body, round((t - shifts[body]) * 100)), [])
+            if hits and one(hits) is not None:
+                out[s] = one(hits)
+                how["camera + capture time (clock corrected)"] += 1
+                continue
+        still.append((s, body, t))
+
+    # 3. no fraction of a second in the copy: the second alone, when only one original fits
+    for s, body, t in still:
+        if round(t % 1, 3) == 0:
+            hits = second.get((body, int(t - shifts.get(body, 0))), [])
+            if hits and one(hits) is not None:
+                out[s] = one(hits)
+                how["camera + capture second"] += 1
+    return out, how
+
+
 def load_label_csv(csv_path: Path, shoot_root: Path) -> dict[str, int]:
     """The studio's choices from a ks match file, keyed like the catalog (relative to the shoot).
 

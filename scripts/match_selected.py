@@ -21,8 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.config import DATA_DIR  # noqa: E402
-from engine.labels import match_selected  # noqa: E402
-from engine.meta import BATCH_SIZE, open_exiftool, tag  # noqa: E402
+from engine.labels import match_by_capture, match_selected  # noqa: E402
+from engine.meta import BATCH_SIZE, camera_name, capture_time, open_exiftool, tag, text  # noqa: E402
 from engine.scan import find_photos  # noqa: E402
 
 LABELS_DIR = DATA_DIR / "labels"
@@ -64,6 +64,38 @@ def event_of(path: Path, base: Path) -> str:
 
 def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "wedding"
+
+
+def capture_of(paths: list[Path], label: str) -> dict[Path, tuple]:
+    """{file: (serial, camera, capture time in seconds)} read with one ExifTool process."""
+    keyed = {os.path.normcase(os.path.abspath(p)): p for p in paths}
+    found: dict[Path, tuple] = {}
+    print(f"Reading camera and capture time of {len(paths):,} {label}...")
+    with open_exiftool() as et:
+        for i in range(0, len(paths), BATCH_SIZE):
+            batch = [str(p) for p in paths[i:i + BATCH_SIZE]]
+            for row in et.get_tags(batch, tags=["Make", "Model", "SerialNumber", "DateTimeOriginal",
+                                                 "SubSecTimeOriginal"]):
+                p = keyed.get(os.path.normcase(os.path.abspath(row.get("SourceFile", ""))))
+                if p is None:
+                    continue
+                when = capture_time(text(tag(row, "DateTimeOriginal")), tag(row, "SubSecTimeOriginal"))
+                found[p] = (text(tag(row, "SerialNumber")), camera_name(text(tag(row, "Make")),
+                            text(tag(row, "Model"))), when["taken_s"])
+    return found
+
+
+def originals_capture(raw_dir: Path, originals: list[Path]) -> dict[Path, tuple]:
+    """From the shoot's catalog when it has been ingested (no need to read the drive again)."""
+    from engine.catalog import Catalog
+    from engine.ingest import shoot_for
+    shoot = shoot_for(raw_dir)
+    if shoot.db.exists():
+        with Catalog(shoot.db) as cat:
+            rows = list(cat.db.execute("SELECT path, serial, camera, taken_s, bytes FROM photos"))
+        if rows:
+            return {raw_dir / path: (serial, camera, taken, size) for path, serial, camera, taken, size in rows}
+    return capture_of(originals, "originals")
 
 
 def labels_file(raw_dir: Path) -> Path:
@@ -109,6 +141,24 @@ def main() -> int:
         return 1
 
     result = match_selected(originals, selected, meta_fn=camera_and_time)
+    if result.unmatched:
+        # renamed on export: match by camera body and capture time instead
+        copies = capture_of(result.unmatched, "selected photos not matched by name")
+        found, how = match_by_capture(copies, originals_capture(raw_dir, originals))
+        by_original = {os.path.normcase(str(p)): p for p in originals}
+        for copy, hit in found.items():
+            for n, original in enumerate(hit if isinstance(hit, tuple) else (hit,)):
+                original = by_original.get(os.path.normcase(str(original)), original)
+                if original in result.matches:
+                    if n == 0:
+                        result.repeats.append(copy)
+                else:
+                    result.matches[original] = copy
+                    if n:
+                        result.how["identical copy in the Raw folder"] += 1
+        for method, n in how.items():
+            result.how[method] += n
+        result.unmatched = [c for c in result.unmatched if c not in found]
 
     LABELS_DIR.mkdir(parents=True, exist_ok=True)
     out = labels_file(raw_dir)
@@ -125,7 +175,9 @@ def main() -> int:
                              str(copy) if copy else "", event_of(p, raw_dir), event])
 
     matched = len(result.matches)
-    print(f"\nMatched {matched} of {len(selected)} selected photos")
+    copies = len(set(result.matches.values()))
+    print(f"\nMatched {copies} of {len(selected)} selected photos"
+          + (f" ({matched} originals marked: some are in the Raw folder twice)" if matched != copies else ""))
     for how, n in result.how.most_common():
         print(f"  by {how:<28}{n:>6}")
     if result.repeats:
