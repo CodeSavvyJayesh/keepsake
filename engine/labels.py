@@ -105,8 +105,10 @@ def attach_labels(catalog, shoot_root: Path) -> tuple[int, str] | None:
     Returns (photos labelled, file name), or None when the studio's choices are not known.
     """
     from .config import DATA_DIR
-    from .ingest import slug
-    label_file = DATA_DIR / "labels" / f"{slug(shoot_root.parent.name)}.csv"
+    from .ingest import shoot_for, slug
+    label_file = DATA_DIR / "labels" / f"{shoot_for(shoot_root).name}.csv"      # ks match, Raw + Selected given
+    if not label_file.exists():
+        label_file = DATA_DIR / "labels" / f"{slug(shoot_root.parent.name)}.csv"   # ks match, wedding folder
     if not label_file.exists():
         return None
     return catalog.save_labels(load_label_csv(label_file, shoot_root), label_file.name), label_file.name

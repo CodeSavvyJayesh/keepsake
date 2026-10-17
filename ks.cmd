@@ -25,6 +25,13 @@ if /i "%CMD%"=="ingest" goto ingest
 if /i "%CMD%"=="quality" goto quality
 if /i "%CMD%"=="faces" goto faces
 if /i "%CMD%"=="eyecheck" goto eyecheck
+if /i "%CMD%"=="clip" goto clip
+if /i "%CMD%"=="groups" goto groups
+if /i "%CMD%"=="evaluate" goto evaluate
+if /i "%CMD%"=="prepare" goto prepare
+if /i "%CMD%"=="cull" goto cull
+if /i "%CMD%"=="apply" goto apply
+if /i "%CMD%"=="undo" goto undo
 if /i "%CMD%"=="models" goto models
 if /i "%CMD%"=="test" goto test
 echo Unknown command: %CMD%
@@ -70,6 +77,34 @@ exit /b %errorlevel%
 "%PY%" "%ROOT%scripts\eyecheck.py" %2
 exit /b %errorlevel%
 
+:clip
+"%PY%" "%ROOT%scripts\clip.py" %2 %3 %4
+exit /b %errorlevel%
+
+:groups
+"%PY%" "%ROOT%scripts\groups.py" %2
+exit /b %errorlevel%
+
+:evaluate
+"%PY%" "%ROOT%scripts\evaluate.py" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
+:prepare
+"%PY%" "%ROOT%scripts\prepare.py" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
+:cull
+"%PY%" "%ROOT%scripts\cull.py" %2 %3 %4 %5 %6
+exit /b %errorlevel%
+
+:apply
+"%PY%" "%ROOT%scripts\apply.py" %2 %3 %4 %5 %6 %7 %8
+exit /b %errorlevel%
+
+:undo
+"%PY%" "%ROOT%scripts\undo.py" %2
+exit /b %errorlevel%
+
 :models
 "%PY%" "%ROOT%scripts\models.py" %2 %3
 exit /b %errorlevel%
@@ -92,6 +127,13 @@ echo   ks ingest "folder" --bench   speed test: best number of workers for this 
 echo   ks quality "folder"   measure sharpness and exposure of an ingested shoot
 echo   ks faces "folder"     find faces; read eyes, smiles and head pose
 echo   ks eyecheck "folder"  make the 50-face eye check page (Phase 2 exit test)
+echo   ks clip "folder"      CLIP embedding for every photo (what it shows)
+echo   ks groups "folder"    line up camera clocks, group moments, find the couple
+echo   ks evaluate "folder" ...  how well it learned the studio's taste (honest test)
+echo   ks prepare "folder" ...  all analysis steps for one or many weddings, unattended
+echo   ks cull "folder"      KeepSake decides Selected / Removed, with a reason for each removal
+echo   ks apply "folder" ["output"]  copy into Selected and Removed folders on this laptop (checked)
+echo   ks undo "output"      remove what ks apply copied (the originals are never touched)
 echo   ks models             download the AI model files (faces, eyes)
 echo   ks test               run the automatic tests
 echo.

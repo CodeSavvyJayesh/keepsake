@@ -240,3 +240,31 @@ def test_eye_check_page(tmp_path, monkeypatch):
     page = (shoot.cache / "review" / "eye_check.html").read_text(encoding="utf-8")
     assert page.count('class="card"') == 6 and '"closed": 2' in page and '"open": 4' in page
     assert len(list((shoot.cache / "review" / "eyecheck").glob("*_face.jpg"))) == 6
+
+
+class FakeRecognizer:
+    def alignCrop(self, img, row):
+        assert row.shape == (15,)
+        return np.zeros((112, 112, 3), np.uint8)
+
+    def feature(self, aligned):
+        return np.ones((1, 128), np.float32)
+
+
+def test_faces_get_fingerprints_when_big_and_confident():
+    reader = FaceReader(detector=FakeDetector([face_row(400, 300, 200), face_row(100, 100, 30)]),
+                        landmarker=None, recognizer=FakeRecognizer())
+    reader.landmarker = None
+    big, small = reader.read(textured())
+    assert len(big["emb"]) == 256 and small["emb"] is None     # 128 x float16; too small for one
+    assert len(big["lm"]) == 40                                # 10 x float32 face points
+
+
+@pytest.mark.skipif(not (MODELS_DIR / "face_recognition_sface_2021dec.onnx").exists(),
+                    reason="face fingerprint model not downloaded (ks models)")
+def test_real_fingerprint_model_loads():
+    reader = FaceReader(detector=FakeDetector([face_row(400, 300, 200)]), landmarker=None)
+    reader.landmarker = None
+    assert reader.recognizer is not None
+    (face,) = reader.read(textured())
+    assert face["emb"] is not None and len(face["emb"]) == 256

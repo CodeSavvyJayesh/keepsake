@@ -1,7 +1,10 @@
 """Phase 2b: every face in a photo, with eyes, smile and head pose.
 
-Two models, both run on this laptop:
+Three models, all run on this laptop:
   YuNet (OpenCV Zoo)          finds faces, down to about 10 px wide, so group photos work.
+  SFace (OpenCV Zoo)          a 128-number fingerprint per face: the same person in two photos
+                               gets similar fingerprints, which is how the bride and groom are
+                               found without anyone naming them (engine/people.py).
   Face Landmarker (MediaPipe)  reads each face: 52 expression scores ("blendshapes") such as
                                eyeBlinkLeft / eyeBlinkRight (0 = wide open, 1 = shut),
                                mouthSmile, and the head's turn and tilt.
@@ -23,9 +26,12 @@ import numpy as np
 
 from .config import MODELS_DIR
 
-FACES_VERSION = 2
+FACES_VERSION = 3
 YUNET_FILE = "face_detection_yunet_2023mar.onnx"
 LANDMARKER_FILE = "face_landmarker.task"
+SFACE_FILE = "face_recognition_sface_2021dec.onnx"
+ID_MIN_PX = 40             # faces at least this wide get a fingerprint (who is it?)
+ID_MIN_SCORE = 0.75
 
 MIN_SCORE = 0.6            # YuNet confidence for a face to count
 DETECT_PX = 1080           # faces are looked for in a 1080 px copy (2.25x fewer pixels than
@@ -60,7 +66,7 @@ BLENDSHAPES = {            # catalog column: MediaPipe blendshape name(s), avera
     "jaw_open": ("jawOpen",),
 }
 FACE_COLUMNS = ("x", "y", "w", "h", "score", "rel_w", "sharp", "contrast", "subject", "read",
-                *BLENDSHAPES, "yaw", "pitch", "roll", "eyes")
+                *BLENDSHAPES, "yaw", "pitch", "roll", "eyes", "lm", "emb")
 
 
 # --- Pure helpers (tested without the models) --------------------------------------
@@ -180,7 +186,7 @@ class FaceReader:
     """Finds and reads faces. Load once per worker process; reuse for every photo."""
 
     def __init__(self, models_dir: Path = MODELS_DIR, detector=None, landmarker=None,
-                 to_image=None, detect_px: int = DETECT_PX):
+                 to_image=None, detect_px: int = DETECT_PX, recognizer=None):
         yunet = models_dir / YUNET_FILE
         if detector is None:
             if not yunet.exists():
@@ -190,6 +196,10 @@ class FaceReader:
         self.landmarker = landmarker if landmarker is not None else _load_landmarker(models_dir)
         self.to_image = to_image or _mediapipe_image
         self.detect_px = detect_px
+        sface = models_dir / SFACE_FILE
+        if recognizer is None and sface.exists():
+            recognizer = cv2.FaceRecognizerSF.create(str(sface), "")
+        self.recognizer = recognizer
 
     @property
     def reads_eyes(self) -> bool:
@@ -221,8 +231,11 @@ class FaceReader:
             x, y, w, h = (float(v) for v in row[:4])
             sharp, contrast = region_sharpness(gray, (x, y, w, h))
             face = {"x": x, "y": y, "w": w, "h": h, "score": float(row[14]),
-                    "rel_w": w / long_side, "sharp": sharp, "contrast": contrast, "read": 0}
+                    "rel_w": w / long_side, "sharp": sharp, "contrast": contrast, "read": 0,
+                    "lm": np.asarray(row[4:14], np.float32).tobytes(), "emb": None}
             face.update({c: None for c in (*BLENDSHAPES, "yaw", "pitch", "roll")})
+            if self.recognizer is not None and w >= ID_MIN_PX and face["score"] >= ID_MIN_SCORE:
+                face["emb"] = self._fingerprint(bgr, row)
             faces.append(face)
         faces.sort(key=lambda f: -f["w"])
         pick_subjects(faces)
@@ -234,6 +247,15 @@ class FaceReader:
             face["eyes"] = eye_state(face)
             face.pop("focus", None)
         return faces
+
+    def _fingerprint(self, bgr: np.ndarray, row: np.ndarray) -> bytes | None:
+        """SFace's 128-number fingerprint of the face, from a crop aligned on its eyes."""
+        from .clip import to_blob
+        try:
+            aligned = self.recognizer.alignCrop(bgr, np.asarray(row, np.float32))
+            return to_blob(self.recognizer.feature(aligned))
+        except cv2.error:
+            return None
 
     def _expression(self, bgr: np.ndarray, box) -> dict:
         crop, centre = square_crop(bgr, box)

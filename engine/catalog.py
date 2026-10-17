@@ -92,7 +92,43 @@ CREATE TABLE IF NOT EXISTS faces (
     squint REAL, look_down REAL, smile REAL, jaw_open REAL,
     yaw REAL, pitch REAL, roll REAL,   -- head turn, nod, tilt in degrees
     eyes       TEXT,                   -- open / closed / unsure / down / side (see faces.py)
+    lm         BLOB,                   -- YuNet's 5 face points (eyes, nose, mouth corners)
+    emb        BLOB,                   -- SFace fingerprint, 128 x float16 (who is it?)
+    person     INTEGER,                -- which person (1 = most photographed); see people.py
     PRIMARY KEY (photo_id, n)
+);
+
+-- Phase 3: CLIP embedding per photo (see engine/clip.py)
+CREATE TABLE IF NOT EXISTS clip (
+    id       INTEGER PRIMARY KEY REFERENCES photos(id),
+    version  INTEGER NOT NULL,
+    ok       INTEGER NOT NULL,
+    error    TEXT,
+    emb      BLOB                     -- 512 x float16, unit length
+);
+
+-- Phase 3: moments (see engine/moments.py) and camera clocks
+CREATE TABLE IF NOT EXISTS moments (
+    id       INTEGER PRIMARY KEY REFERENCES photos(id),
+    moment   INTEGER NOT NULL,        -- id of the first photo of the moment
+    size     INTEGER NOT NULL,        -- photos in the moment
+    pos      INTEGER NOT NULL         -- this photo's place in it, in time order (0 = first)
+);
+CREATE TABLE IF NOT EXISTS clocks (
+    body     TEXT PRIMARY KEY,
+    offset   REAL,                    -- seconds added to this camera's times (NULL = unknown)
+    support  INTEGER                  -- matching photo pairs the offset rests on
+);
+
+-- Phase 4: KeepSake's own choice per photo (see engine/cull.py)
+CREATE TABLE IF NOT EXISTS cull (
+    id        INTEGER PRIMARY KEY REFERENCES photos(id),
+    decision  TEXT NOT NULL,          -- 'selected' / 'removed'
+    unsure    INTEGER NOT NULL,       -- 1 = AI unsure, kept in Selected for a person to check
+    score     REAL,                   -- 0-100, higher = more likely the studio would pick it
+    reason    TEXT,                   -- why it was removed (or why it was kept although unsure)
+    similar   INTEGER,                -- the kept photo of the same moment, for 'similar' removals
+    changed   INTEGER NOT NULL DEFAULT 0   -- 1 = moved by a person on the review page
 );
 
 -- The studio's own choices, when known (from ks match): 1 = selected, 0 = not selected
@@ -155,7 +191,8 @@ class Catalog:
 
     def _add_missing_columns(self) -> None:
         """Catalogs made by an older KeepSake get the columns added since (data is kept)."""
-        added = {"faces": [("subject", "INTEGER"), ("eyes", "TEXT")]}
+        added = {"faces": [("subject", "INTEGER"), ("eyes", "TEXT"), ("lm", "BLOB"), ("emb", "BLOB"),
+                           ("person", "INTEGER")]}
         for table, columns in added.items():
             have = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
             for name, kind in columns:
@@ -301,6 +338,43 @@ class Catalog:
                     (r["id"], version, int(r.get("ok", False)), r.get("error"),
                      len(r.get("faces", [])), int(bool(r.get("eyes")))))
 
+    def clip_pending(self, version: int) -> list[int]:
+        return [r[0] for r in self.db.execute(
+            "SELECT p.id FROM photos p LEFT JOIN clip c ON c.id = p.id WHERE p.status = 'done' "
+            "AND (c.id IS NULL OR c.version < ? OR c.ok = 0) ORDER BY p.id", (version,))]
+
+    def save_clip(self, items: list[dict], version: int) -> None:
+        with self.db:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO clip (id, version, ok, error, emb) VALUES (?, ?, ?, ?, ?)",
+                [(r["id"], version, int(r["ok"]), r.get("error"), r.get("emb")) for r in items])
+
+    def clip_vectors(self):
+        """(photo ids, N x 512 float32 matrix of unit vectors) for every embedded photo."""
+        import numpy as np
+        rows = list(self.db.execute(
+            "SELECT c.id, c.emb FROM clip c JOIN photos p ON p.id = c.id "
+            "WHERE c.ok = 1 AND p.status = 'done' ORDER BY c.id"))
+        ids = [r[0] for r in rows]
+        if not rows:
+            return ids, np.zeros((0, 512), np.float32)
+        return ids, np.stack([np.frombuffer(r[1], np.float16) for r in rows]).astype(np.float32)
+
+    def save_moments(self, groups: list[list[int]], offsets: dict, support: dict) -> None:
+        rows = [(pid, g[0], len(g), pos) for g in groups for pos, pid in enumerate(g)]
+        with self.db:
+            self.db.execute("DELETE FROM moments")
+            self.db.executemany("INSERT INTO moments (id, moment, size, pos) VALUES (?, ?, ?, ?)", rows)
+            self.db.execute("DELETE FROM clocks")
+            self.db.executemany("INSERT INTO clocks (body, offset, support) VALUES (?, ?, ?)",
+                                [(b, offsets.get(b), support.get(b)) for b in support])
+
+    def save_people(self, assignment: dict[tuple[int, int], int]) -> None:
+        with self.db:
+            self.db.execute("UPDATE faces SET person = NULL")
+            self.db.executemany("UPDATE faces SET person = ? WHERE photo_id = ? AND n = ?",
+                                [(person, pid, n) for (pid, n), person in assignment.items()])
+
     def refresh_eyes(self, rule) -> int:
         """Re-judge every read face with the current eye rule, from the stored scores (no need
         to read the photos again). Returns how many verdicts changed."""
@@ -322,6 +396,24 @@ class Catalog:
             self.db.execute("DELETE FROM labels")
             self.db.executemany("INSERT INTO labels (id, selected, source) VALUES (?, ?, ?)", rows)
         return len(rows)
+
+    def save_cull(self, rows: list[tuple], settings: dict) -> None:
+        """rows: (id, decision, unsure, score, reason, similar)."""
+        import json
+        with self.db:
+            self.db.execute("DELETE FROM cull")
+            self.db.executemany("INSERT INTO cull (id, decision, unsure, score, reason, similar) "
+                                "VALUES (?, ?, ?, ?, ?, ?)", rows)
+            self.db.execute("INSERT OR REPLACE INTO info (key, value) VALUES ('cull', ?)",
+                            (json.dumps(settings),))
+
+    def move(self, photo_ids: list[int], decision: str) -> int:
+        """A person's change: these photos go to Selected or Removed."""
+        with self.db:
+            cur = self.db.executemany(
+                "UPDATE cull SET decision = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",
+                [(decision, "moved by you", pid) for pid in photo_ids])
+        return cur.rowcount
 
     def labelled_quality(self) -> list[dict]:
         cur = self.db.execute(

@@ -5,6 +5,8 @@
 
 YuNet (OpenCV Zoo, MIT licence): finds faces, including small ones in group photos.
 Face Landmarker (Google MediaPipe, Apache 2.0): eyes, smile and head pose for each face.
+SFace (OpenCV Zoo, Apache 2.0): a fingerprint per face, to find the same person again.
+CLIP ViT-B/32 vision model (OpenAI, MIT; int8 ONNX export by Xenova): what a photo shows.
 """
 from __future__ import annotations
 
@@ -24,6 +26,12 @@ MODELS = {   # file name: (address, smallest believable size in bytes)
     "face_landmarker.task": (
         "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/"
         "float16/1/face_landmarker.task", 1_000_000),
+    "face_recognition_sface_2021dec.onnx": (
+        "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/"
+        "face_recognition_sface_2021dec.onnx", 20_000_000),
+    "clip_vit_b32_vision_int8.onnx": (
+        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/"
+        "vision_model_quantized.onnx", 50_000_000),
 }
 
 
@@ -47,10 +55,22 @@ def download(url: str, target: Path, min_bytes: int) -> str:
 
 def check(name: str, path: Path) -> str:
     """Load the model once to prove it works here."""
-    if name.endswith(".onnx"):
+    if name.startswith("face_detection"):
         import cv2
         cv2.FaceDetectorYN.create(str(path), "", (320, 320))
         return "loads in OpenCV"
+    if name.startswith("face_recognition"):
+        import cv2
+        cv2.FaceRecognizerSF.create(str(path), "")
+        return "loads in OpenCV"
+    if name.startswith("clip"):
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            return "downloaded (ONNX Runtime not installed yet, so not loaded)"
+        session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+        outputs = [o.name for o in session.get_outputs()]
+        return f"loads in ONNX Runtime (outputs: {', '.join(outputs)})"
     try:
         from mediapipe.tasks.python import BaseOptions, vision
     except ImportError:
