@@ -76,11 +76,37 @@ def test_cull_learns_from_other_weddings(tmp_path):
     new = fake_wedding(tmp_path / "new" / "catalog.db", labelled=False)
     others = labelled_shoots(tmp_path, exclude=tmp_path / "new" / "catalog.db")
     assert [p.parent.name for p in others] == ["past_one", "past_two"]
-    r = cull_shoot(new, "new", others, make_model=Logistic)
+    r = cull_shoot(new, "new", others, make_model=Logistic, style="safe")
     assert r.mode == "other weddings" and r.caught is None and len(r.rows) == 240
     assert 0.2 < r.keep_share < 1.0
     similar = [row for row in r.rows if row[4] and row[4].startswith("Similar photo kept")]
     assert all(row[5] for row in similar)
+
+
+def test_new_wedding_gets_one_photo_per_shot_with_eyes_open(tmp_path):
+    """Default style: like the studio. Each 3-frame burst is one shot (near-identical pictures);
+    the middle frame of every burst has closed eyes and must never be the one kept."""
+    for name in ("past_one", "past_two"):
+        (tmp_path / name).mkdir()
+        fake_wedding(tmp_path / name / "catalog.db").close()
+    (tmp_path / "new").mkdir()
+    new = fake_wedding(tmp_path / "new" / "catalog.db", labelled=False)
+    for first in range(1, 241, 3):
+        base = RNG.normal(size=512)
+        for pid in range(first, first + 3):
+            new.db.execute("UPDATE clip SET emb = ? WHERE id = ?", (to_blob(base + RNG.normal(0, 0.05, 512)), pid))
+        new.db.execute("UPDATE faces SET eyes = 'closed' WHERE photo_id = ?", (first + 1,))
+    new.db.commit()
+    others = labelled_shoots(tmp_path, exclude=tmp_path / "new" / "catalog.db")
+    r = cull_shoot(new, "new", others, make_model=Logistic)
+    assert r.style == "studio" and r.shots == 80
+    chosen = [pid for pid, d, *_ in r.rows if d == "selected"]
+    assert abs(len(chosen) - round(r.keep_share * 240)) <= 1 and 0.1 < r.keep_share < 0.35
+    assert len({(pid - 1) // 3 for pid in chosen}) == len(chosen)          # never two frames of one shot
+    assert not any(pid % 3 == 2 for pid in chosen)                         # never the closed-eyes frame
+    same = [row for row in r.rows if row[4] and row[4].startswith("Same shot as")]
+    assert same and all(row[5] in chosen for row in same)
+    assert any("eyes closed" in row[4] for row in same)
 
 
 def make_drive(tmp_path, cat: Catalog):

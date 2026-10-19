@@ -1,8 +1,9 @@
 r"""Phase 4: KeepSake's own Selected / Removed for a shoot, with a reason for every removal.
 
-    ks cull "E:\Sharma Wedding\Raw"              learn from past weddings, decide every photo
-    ks cull "E:\Sharma Wedding\Raw" --target 90  catch 90% of the studio's picks (smaller shortlist)
-    ks cull "E:\Sharma Wedding\Raw" --keep 50    keep exactly the best 50% (+ AI unsure)
+    ks cull "E:\Sharma Wedding\Raw"              like the studio: its usual share, ONE best photo per shot
+    ks cull "E:\Sharma Wedding\Raw" --keep 15    the same, but keep 15% of the photos
+    ks cull "E:\Sharma Wedding\Raw" --safe       a big safe shortlist: 95% of what the studio would pick
+    ks cull "E:\Sharma Wedding\Raw" --target 90  safe shortlist catching 90% (smaller)
 
 The shoot must be prepared first (ks prepare). Nothing is copied or moved yet: open the review
 page, change anything you disagree with, then run ks apply. See engine/cull.py for the method.
@@ -120,6 +121,7 @@ def main() -> int:
         return 1
     target = option("--target") or TARGET
     keep = option("--keep")
+    style = "safe" if ("--safe" in sys.argv or "--target" in sys.argv) else "studio"
     start = time.perf_counter()
     others = labelled_shoots(CACHE_DIR, exclude=shoot.db)
     with Catalog(shoot.db) as cat:
@@ -129,11 +131,11 @@ def main() -> int:
             return 1
         print(f"Learning from {len(others)} other wedding(s) and deciding every photo...")
         try:
-            result = cull_shoot(cat, shoot.name, others, target=target, keep_share=keep)
+            result = cull_shoot(cat, shoot.name, others, target=target, keep_share=keep, style=style)
         except RuntimeError as e:
             print(e)
             return 1
-        settings = {"when": now_text(), "target": target, "keep_share": result.keep_share,
+        settings = {"when": now_text(), "style": result.style, "target": target, "keep_share": result.keep_share,
                     "unsure_band": UNSURE_BAND, "mode": result.mode, "model": result.model,
                     "trained_on": result.trained_on}
         cat.save_cull(result.rows, settings)
@@ -149,11 +151,16 @@ def main() -> int:
     else:
         learned = ("this wedding's own studio choices: each event decided by a model trained only on "
                    f"the other events ({result.train_picks:,} picks)")
+    if result.style == "studio":
+        how = [f"  Model               {result.model}; chooses like the studio, one photo per shot",
+               f"  Shots               {result.shots:,} (near-identical frames grouped)",
+               f"  How many            {result.keep_share:.1%} of photos (this studio's usual share)",
+               "  Best frame          the frame the studio would keep; not closed / half-closed eyes or turned heads"]
+    else:
+        how = [f"  Model               {result.model}; aim: keep {target:.0%} of what the studio would pick",
+               f"  Shortlist size      {result.keep_share:.0%} of photos, plus {UNSURE_BAND:.0%} 'AI unsure' kept for you to check"]
     lines = [f"KeepSake cull - {shoot.name} - {now_text()}", "",
-             f"  Learned from        {learned}",
-             f"  Model               {result.model}; aim: keep {target:.0%} of what the studio would pick",
-             f"  Shortlist size      {result.keep_share:.0%} of photos, plus {UNSURE_BAND:.0%} 'AI unsure' kept for you to check",
-             "",
+             f"  Learned from        {learned}", *how, "",
              f"  Selected            {selected:,} of {total:,} ({selected / max(total, 1):.0%}); "
              f"{d[('selected', 1)]:,} of them AI unsure",
              f"  Removed             {removed:,} ({removed / max(total, 1):.0%})"]

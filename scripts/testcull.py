@@ -4,8 +4,9 @@ this wedding's studio choices.
     ks cull "D:\All Raw images\Rishi & Aashi"         (first: learns only from the OTHER weddings)
     ks testcull "D:\All Raw images\Rishi & Aashi" [--keep 10]
 
-KeepSake keeps as many photos as this studio usually does (its pick rate in the other weddings),
-or --keep percent. The result goes to C:\KeepSake Output\KeepSake choice - <wedding>\Selected
+After a studio-style cull (the default) KeepSake's choice is the cull's own Selected photos among
+the test photos: one photo per shot. With --keep (or after ks cull --safe) it keeps that share of
+the test photos, best scores first. The result goes to C:\KeepSake Output\KeepSake choice - <wedding>\Selected
 and \Removed (copies of the test photos, numbered like the editor's folder), and the comparison
 with the studio's old choices is printed and saved in data\repick. Do not give this folder to
 the editor before they have done their re-pick.
@@ -66,6 +67,7 @@ def main() -> int:
     key = list(csv.DictReader(open(key_file, encoding="utf-8")))
     with Catalog(shoot.db) as cat:
         scores = dict(cat.db.execute("SELECT id, score FROM cull"))
+        decisions = dict(cat.db.execute("SELECT id, decision FROM cull"))
         settings = json.loads(cat.get("cull") or "{}")
     if not scores:
         print(f'Run the cull first:  ks cull "{root}"')
@@ -75,18 +77,28 @@ def main() -> int:
               f'other wedding with the studio\'s choices, then run  ks cull "{root}"  again.')
         return 1
     others = labelled_shoots(CACHE_DIR, exclude=shoot.db)
-    share = keep if keep is not None else studio_rate(others)
     n = len(key)
-    n_keep = max(1, round(share * n))
-    ranked = sorted(key, key=lambda r: -(scores.get(int(r["photo_id"])) or 0))
-    chosen = {r["copy"] for r in ranked[:n_keep]}
+    if keep is None and settings.get("style") == "studio":
+        chosen = {r["copy"] for r in key if decisions.get(int(r["photo_id"])) == "selected"}
+        n_keep = len(chosen)
+        how = "one photo per shot, this studio's usual share"
+    else:
+        share = keep if keep is not None else studio_rate(others)
+        n_keep = max(1, round(share * n))
+        ranked = sorted(key, key=lambda r: -(scores.get(int(r["photo_id"])) or 0))
+        chosen = {r["copy"] for r in ranked[:n_keep]}
+        how = "best scores" if keep is not None else "best scores, this studio's usual share"
     out = OUTPUT_ROOT / f"KeepSake choice - {root.name}"
     for sub in ("Selected", "Removed"):
         (out / sub).mkdir(parents=True, exist_ok=True)
     for r in key:
         src = folder / r["copy"]
-        if src.exists():
-            shutil.copy2(src, out / ("Selected" if r["copy"] in chosen else "Removed") / r["copy"])
+        here, other = ("Selected", "Removed") if r["copy"] in chosen else ("Removed", "Selected")
+        old = out / other / r["copy"]
+        if old.exists():                       # KeepSake's own copy from an earlier run
+            old.unlink()
+        if src.exists() and not (out / here / r["copy"]).exists():
+            shutil.copy2(src, out / here / r["copy"])
 
     studio = {r["copy"] for r in key if r["studio_selected"] == "1"}
     both = chosen & studio
@@ -95,10 +107,10 @@ def main() -> int:
              f"  KeepSake learned from {len(settings.get('trained_on', []))} other weddings; it never saw this "
              "wedding's studio choices.",
              f"  Photos in the test          {n}",
-             f"  KeepSake chose              {n_keep} ({n_keep / n:.0%}, this studio's usual share)",
+             f"  KeepSake chose              {n_keep} ({n_keep / n:.0%}; {how})",
              f"  The studio had chosen       {len(studio)}",
              f"  Chosen by both              {len(both)}",
-             f"    = {len(both) / n_keep:.0%} of KeepSake's choices were also the studio's",
+             f"    = {len(both) / max(n_keep, 1):.0%} of KeepSake's choices were also the studio's",
              f"    = KeepSake found {len(both) / max(len(studio), 1):.0%} of the studio's choices",
              f"  By pure chance, about {chance:.0f} would match.",
              f"  Folders: {out}\\Selected and \\Removed"]

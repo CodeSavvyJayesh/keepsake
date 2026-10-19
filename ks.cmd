@@ -34,6 +34,7 @@ if /i "%CMD%"=="apply" goto apply
 if /i "%CMD%"=="undo" goto undo
 if /i "%CMD%"=="testset" goto testset
 if /i "%CMD%"=="testcull" goto testcull
+if /i "%CMD%"=="blindtest" goto blindtest
 if /i "%CMD%"=="models" goto models
 if /i "%CMD%"=="test" goto test
 echo Unknown command: %CMD%
@@ -115,6 +116,10 @@ exit /b %errorlevel%
 "%PY%" "%ROOT%scripts\testcull.py" %2 %3 %4
 exit /b %errorlevel%
 
+:blindtest
+"%PY%" "%ROOT%scripts\blindtest.py" %2 %3 %4
+exit /b %errorlevel%
+
 :models
 "%PY%" "%ROOT%scripts\models.py" %2 %3
 exit /b %errorlevel%
@@ -146,6 +151,7 @@ echo   ks apply "folder" ["output"]  copy into Selected and Removed folders on t
 echo   ks undo "output"      remove what ks apply copied (the originals are never touched)
 echo   ks testset "folder"   a 400-photo folder for the studio's re-pick test
 echo   ks testcull "folder"  KeepSake chooses blind from the same test photos
+echo   ks blindtest          KeepSake chooses blind on every past wedding (selected / removed folders)
 echo   ks models             download the AI model files (faces, eyes)
 echo   ks test               run the automatic tests
 echo.
