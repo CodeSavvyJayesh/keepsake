@@ -4,8 +4,9 @@ Two styles:
   studio (default)  Selected looks like the studio's own selection: as many photos as this studio
                     usually keeps (its pick rate in the past weddings), ONE photo per shot (near-
                     identical frames, engine/shots.py), and of each shot its best frame: the frame the
-                    studio would keep, never one with closed or half-closed eyes or a turned head when
-                    a better frame of the shot exists. Same method as ks blindtest.
+                    studio would keep, judged by each main face's eyes, head turn, sharpness and smile,
+                    with a penalty for eyes read as closed and turned heads. Shots are ranked by the
+                    model plus the photo's full CLIP content. Same method as ks blindtest.
   safe (--safe)     a large shortlist that catches TARGET (95%) of the studio's picks, steps 1-4 below.
 
 1. Learn. A model (LightGBM, or logistic regression when LightGBM is missing) learns the
@@ -36,7 +37,8 @@ import numpy as np
 
 from .catalog import Catalog
 from .learn import GBM, Dataset, Logistic, combine, lightgbm_available, photo_features
-from .shots import frame_penalty, group_shots, one_per_shot, relative_to_shot, train_frame_ranker
+from .shots import (CLIP_WEIGHT, FACE_DETAILS, centred_clip, clip_ridge, face_details, frame_penalty, group_shots,
+                    one_per_shot, relative_to_shot, train_frame_ranker)
 
 TARGET = 0.95              # catch this share of what the studio would pick...
 UNSURE_BAND = 0.05         # ...and keep this share of photos more, just below the cut, as 'AI unsure'
@@ -212,9 +214,14 @@ def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], kee
     model = make_model().fit(data.X[rows], data.y[rows])
     my_events = list(me.group)
     score = np.zeros(len(data.y))
-    score[mine] = per_event_scale(model.predict(data.X[mine]), my_events)
+    C = centred_clip(data.clip, wedding)                      # + the photo's full content (CLIP)
+    content = clip_ridge(C[rows], data.y[rows])
+    score[mine] = ((1 - CLIP_WEIGHT) * per_event_scale(model.predict(data.X[mine]), my_events)
+                   + CLIP_WEIGHT * per_event_scale(C[mine] @ content, my_events))
     shot = group_shots(data.moment, data.clip, list(wedding))
-    R = relative_to_shot(data.X, shot)
+    details = np.vstack([d.meta["faces"] if d.meta.get("faces") is not None
+                         else np.zeros((len(d.ids), len(FACE_DETAILS)), np.float32) for d in train + [me]])
+    R = relative_to_shot(np.hstack([data.X, details]), shot)  # best frame: + each main face's details
     ranker = train_frame_ranker(R, data.y, shot, rows)
     frame = np.zeros(len(data.y))
     frame[mine] = (ranker.predict(R[mine]) if ranker is not None else score[mine]) \
@@ -271,12 +278,14 @@ def cull_shoot(cat: Catalog, name: str, others: list[Path], target: float = TARG
     else:
         model_name = getattr(make_model, "name", "model")
     me = photo_features(cat, name)
+    me.meta["faces"] = face_details(cat, me.ids)
     if me.clip is None:
         raise RuntimeError("This shoot has no CLIP embeddings yet. Run first:  ks prepare (or ks clip, ks groups)")
     train = []
     for db in others:
         with Catalog(db) as other:
             ds = photo_features(other, db.parent.name)
+            ds.meta["faces"] = face_details(other, ds.ids)
         if ds.clip is not None and (ds.y == 1).any():
             train.append(ds)
     if train and style == "studio":

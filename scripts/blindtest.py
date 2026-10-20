@@ -1,7 +1,7 @@
 r"""The blind test on every past wedding: KeepSake chooses like the studio, without seeing its answers.
 
     ks blindtest                 every prepared wedding with the studio's choices (needs 2 or more)
-    ks blindtest --list-removed  copy only the Selected photos; Removed are listed in a file
+    ks blindtest --list-removed  copy only the Selected photos; Not selected are listed in a file
     ks blindtest --add-studio "C:\KeepSake Output\KeepSake blind test 2026-10-19 19.36"
                                  add the studio's folders to an earlier run (no new decisions)
 
@@ -11,7 +11,7 @@ shot (near-identical frames grouped, see engine/shots.py), choosing the best fra
 
 Output, on this laptop (copies of KeepSake's own previews, no drive needed):
     C:\KeepSake Output\KeepSake blind test <date>\<wedding>\KeepSake selected (612)\...
-                                                           \KeepSake removed (5,672)\...
+                                                           \KeepSake not selected (5,672)\...
                                                            \Studio selected (624)\...
                                                            \Studio not selected (5,660)\...
                                                            \Selected by both (132)\...
@@ -36,7 +36,8 @@ from engine.config import CACHE_DIR  # noqa: E402
 from engine.cull import labelled_shoots, model_factory, per_event_scale  # noqa: E402
 from engine.ingest import cache_path, duration  # noqa: E402
 from engine.learn import combine, photo_features  # noqa: E402
-from engine.shots import frame_penalty, group_shots, one_per_shot, relative_to_shot, train_frame_ranker  # noqa: E402
+from engine.shots import (CLIP_WEIGHT, centred_clip, clip_ridge, face_details, frame_penalty, group_shots,  # noqa: E402
+                          one_per_shot, relative_to_shot, train_frame_ranker)
 
 OUTPUT_ROOT = Path("C:/KeepSake Output")
 PREVIEW_MB = 0.3
@@ -78,7 +79,7 @@ def add_studio_folders(folder: Path) -> tuple[int, int, int] | None:
         return None
     rows = list(csv.DictReader(open(choices, encoding="utf-8")))
     sel_dir = next(folder.glob("KeepSake selected (*)"), None)
-    rem_dir = next(folder.glob("KeepSake removed (*)"), None)
+    rem_dir = next(folder.glob("KeepSake not selected (*)"), None) or next(folder.glob("KeepSake removed (*)"), None)
     studio = [r for r in rows if r["studio_picked"] == "1"]
     both = [r for r in studio if r["keepsake"] == "selected"]
     targets = {"Studio selected": studio, "Studio not selected": [r for r in rows if r["studio_picked"] != "1"],
@@ -116,10 +117,11 @@ def main() -> int:
     start = time.perf_counter()
     make_model, model_name = model_factory()
     print(f"Reading {len(dbs)} weddings...")
-    datasets, names, orders = [], {}, {}
+    datasets, details, names, orders = [], [], {}, {}
     for db in dbs:
         with Catalog(db) as cat:
             ds = photo_features(cat, db.parent.name)
+            details.append(face_details(cat, ds.ids))
             names[db.parent.name] = display_name(cat, db.parent.name)
             orders[db.parent.name] = time_order(cat)
         datasets.append(ds)
@@ -130,7 +132,8 @@ def main() -> int:
     y = data.y
     known = y >= 0
     shot = group_shots(data.moment, data.clip, list(wedding))
-    R = relative_to_shot(data.X, shot)
+    R = relative_to_shot(np.hstack([data.X, np.vstack(details)]), shot)     # frame choice: + each face's details
+    C = centred_clip(data.clip, wedding)                                      # shot choice: + full CLIP content
     penalty = frame_penalty(data.X, data.names)
 
     total_files = len(ids) if not list_removed else int(0.12 * len(ids))
@@ -139,13 +142,15 @@ def main() -> int:
     free = shutil.disk_usage(out_root).free / 1e6
     if free < total_files * PREVIEW_MB + 2000:
         print(f"Not enough free space for all copies (about {total_files * PREVIEW_MB / 1000:.0f} GB); "
-              "copying only Selected and listing Removed.")
+              "copying only Selected and listing Not selected.")
         list_removed = True
 
     lines = [f"KeepSake blind test - {now_text()}",
              f"Each wedding was decided by a {model_name} model trained only on the other weddings.",
-             "KeepSake keeps this studio's usual share of photos, one photo per shot (best frame).", "",
-             f"{'Wedding':<30}{'photos':>8}{'KeepSake selected':>19}{'KeepSake removed':>18}"
+             "KeepSake keeps this studio's usual share of photos, one photo per shot (best frame).",
+             "Shots ranked by the model plus the photo's full content (CLIP); best frame by each face's eyes,",
+             "head turn, sharpness and smile compared with the other frames of the burst.", "",
+             f"{'Wedding':<30}{'photos':>8}{'KeepSake selected':>19}{'not selected':>14}"
              f"{'studio picks':>14}{'same photo':>12}{'same shot':>11}{'chance':>8}"]
     totals = np.zeros(7)
     for w in sorted(set(wedding), key=lambda k: names[k].lower()):
@@ -154,7 +159,9 @@ def main() -> int:
         train = (wedding != w) & known
         model = make_model().fit(data.X[train], y[train])
         score = np.zeros(len(y))
-        score[test] = per_event_scale(model.predict(data.X[test]), [w] * len(test))
+        content = clip_ridge(C[train], y[train])
+        score[test] = ((1 - CLIP_WEIGHT) * per_event_scale(model.predict(data.X[test]), [w] * len(test))
+                       + CLIP_WEIGHT * per_event_scale(C[test] @ content, [w] * len(test)))
         ranker = train_frame_ranker(R, y, shot, np.flatnonzero(train))
         frame_score = np.zeros(len(y))
         frame_score[test] = (ranker.predict(R[test]) if ranker is not None else score[test]) - penalty[test]
@@ -165,7 +172,7 @@ def main() -> int:
         order = orders[w]
         folder = out_root / names[w]
         sel_dir = folder / f"KeepSake selected ({len(chosen):,})"
-        rem_dir = folder / f"KeepSake removed ({len(test) - len(chosen):,})"
+        rem_dir = folder / f"KeepSake not selected ({len(test) - len(chosen):,})"
         sel_dir.mkdir(parents=True, exist_ok=True)
         if not list_removed:
             rem_dir.mkdir(parents=True, exist_ok=True)
@@ -186,7 +193,7 @@ def main() -> int:
                         reason = f"similar to {kb:05d}_{Path(bb).stem}.jpg (same shot), which is kept"
                     else:
                         reason = "shot not among the best"
-                    target, decision = rem_dir / name, "removed"
+                    target, decision = rem_dir / name, "not selected"
                 writer.writerow([name, decision, reason, int(y[i] == 1)])
                 if decision == "selected" or not list_removed:
                     src = cache_path(cache, "analysis", pid)
@@ -201,11 +208,11 @@ def main() -> int:
         same_shot = len({shot[i] for i in chosen} & pick_shots)
         chance = len(chosen) * len(picks) / len(test)
         totals += [len(test), len(chosen), len(test) - len(chosen), len(picks), same, same_shot, chance]
-        lines.append(f"{names[w][:29]:<30}{len(test):>8,}{len(chosen):>19,}{len(test) - len(chosen):>18,}"
+        lines.append(f"{names[w][:29]:<30}{len(test):>8,}{len(chosen):>19,}{len(test) - len(chosen):>14,}"
                      f"{len(picks):>14,}{same:>12,}{same_shot:>11,}{chance:>8.0f}")
-        print(f"  {names[w]:<34} selected {len(chosen):,}, removed {len(test) - len(chosen):,}; "
+        print(f"  {names[w]:<34} selected {len(chosen):,}, not selected {len(test) - len(chosen):,}; "
               f"{same} same photos as the studio, {same_shot} same shots ({duration(time.perf_counter() - t0)})")
-    lines += [f"{'All weddings':<30}{int(totals[0]):>8,}{int(totals[1]):>19,}{int(totals[2]):>18,}"
+    lines += [f"{'All weddings':<30}{int(totals[0]):>8,}{int(totals[1]):>19,}{int(totals[2]):>14,}"
               f"{int(totals[3]):>14,}{int(totals[4]):>12,}{int(totals[5]):>11,}{totals[6]:>8.0f}", "",
               f"Same photo: {totals[4] / totals[1]:.0%} of KeepSake's choices were also the studio's "
               f"(pure chance: {totals[6] / totals[1]:.0%}).",

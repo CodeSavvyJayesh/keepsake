@@ -1,0 +1,5 @@
+Bundled fonts (so the app looks the same offline on any computer):
+  Latin Modern Roman 17 and 12 Italic (GUST e-foundry) - GUST Font License (free to use and share)
+  Inter and Inter Display (Rasmus Andersson) - SIL Open Font License 1.1
+  Lora (Cyreal) - SIL Open Font License 1.1 (earlier design, still bundled)
+These licences allow bundling the fonts with software; they may not be sold on their own.

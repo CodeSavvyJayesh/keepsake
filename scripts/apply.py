@@ -1,11 +1,11 @@
-r"""Phase 4: copy the cull into Selected and Removed folders on this laptop.
+r"""Phase 4: copy the cull into Selected and Not selected folders on this laptop.
 
     ks apply "E:\Sharma Wedding\Raw" ["C:\KeepSake Output\Sharma"] [--changes file.csv] [--removed list]
              [--folder "Haldi"]     only the photos of one event folder (a quick trial)
 
 The photo drive is only read: every original is copied with a checksum check (see
 engine/deliver.py), keeping its event folders and file name. --changes takes the file saved
-from the review page (your moves). --removed list copies only Selected and lists the Removed
+from the review page (your moves). --removed list copies only Selected and lists the Not selected
 photos in the manifest (saves space). Running it again carries on where it stopped.
 Undo with:  ks undo "output folder"
 """
@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
 from engine.config import DATA_DIR  # noqa: E402
-from engine.deliver import MANIFEST, README, OutputError, apply, jobs_from  # noqa: E402
+from engine.deliver import MANIFEST, README, SELECTED, OutputError, apply, jobs_from  # noqa: E402
 from engine.ingest import duration, shoot_for  # noqa: E402
 
 
@@ -60,7 +60,7 @@ def main() -> int:
     out = clean_path(args[1]) if len(args) > 1 else DATA_DIR / "output" / shoot.name
     removed = (option("--removed") or "copy").lower()
     if removed not in ("copy", "list"):
-        print("--removed must be 'copy' (copy the Removed photos too) or 'list' (only list them)")
+        print("--removed must be 'copy' (copy the Not selected photos too) or 'list' (only list them)")
         return 1
     if not shoot.db.exists():
         print(f'This shoot has not been prepared yet. Run first:  ks prepare "{root}"')
@@ -82,9 +82,9 @@ def main() -> int:
         if not jobs:
             print(f"No photos in a folder called '{only}' (give the event folder name as it is on the drive)")
             return 1
-    n_sel = sum(1 for j, _ in jobs if j.folder == "Selected")
-    print(f"Copying {n_sel:,} Selected" + (f" and {len(jobs) - n_sel:,} Removed" if removed == "copy" else
-                                          f" (and listing {len(jobs) - n_sel:,} Removed)") + f" photos to {out}")
+    n_sel = sum(1 for j, _ in jobs if j.folder == SELECTED)
+    print(f"Copying {n_sel:,} Selected" + (f" and {len(jobs) - n_sel:,} Not selected" if removed == "copy" else
+                                          f" (and listing {len(jobs) - n_sel:,} Not selected)") + f" photos to {out}")
     start = time.perf_counter()
     try:
         report = apply(root, out, jobs)
@@ -99,7 +99,7 @@ def main() -> int:
              f"  Output folder              {out}",
              f"  Copied now                 {report.copied:,} files, {report.bytes / 1e9:,.2f} GB",
              f"  Already there              {report.skipped:,}" + (f"; moved between folders {report.moved:,}" if report.moved else ""),
-             f"  Removed, listed only       {report.listed:,}" if report.listed else "",
+             f"  Not selected, listed only  {report.listed:,}" if report.listed else "",
              "  Every copy checked: its SHA-256 checksum equals the original's, and each original's",
              "  size and date were the same before and after it was read. Nothing was written to the",
              "  photo drive.",

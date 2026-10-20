@@ -126,7 +126,7 @@ def test_apply_copies_checks_and_undoes(tmp_path):
     before = {p: (p.stat().st_mtime_ns, hashlib.sha256(p.read_bytes()).hexdigest()) for p in root.rglob("*.JPG")}
     out = tmp_path / "laptop" / "Output"
     report = apply(root, out, jobs_from(cat), progress=lambda s: None)
-    assert report.copied == 30 and set(report.folders) == {"Selected", "Removed"}
+    assert report.copied == 30 and set(report.folders) == {"Selected", "Not selected"}
     rows = list(csv.DictReader(open(out / MANIFEST, encoding="utf-8")))
     for row in rows:
         copy = out / row["copy"]
@@ -144,7 +144,7 @@ def test_apply_copies_checks_and_undoes(tmp_path):
     moved = apply(root, out, jobs_from(cat), progress=lambda s: None)
     assert moved.moved == 1 and moved.copied == 0
     name = cat.db.execute("SELECT path FROM photos WHERE id = ?", (first_removed,)).fetchone()[0]
-    assert (out / "Selected" / name).exists() and not (out / "Removed" / name).exists()
+    assert (out / "Selected" / name).exists() and not (out / "Not selected" / name).exists()
 
     edited = next((out / "Selected").rglob("*.JPG"))
     edited.write_bytes(b"edited by the photographer")
@@ -163,7 +163,7 @@ def test_apply_list_only_removed(tmp_path):
     report = apply(root, out, jobs_from(cat, removed="list"), progress=lambda s: None)
     n_removed = sum(1 for row in r.rows if row[1] == "removed")
     assert report.listed == n_removed and report.copied == 30 - n_removed
-    assert not (out / "Removed").exists()
+    assert not (out / "Not selected").exists()
 
 
 def test_output_never_on_the_photo_drive(tmp_path):

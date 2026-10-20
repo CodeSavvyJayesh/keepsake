@@ -1,0 +1,636 @@
+r"""KeepSake desktop app: choose a wedding folder, press Start, get Selected and Not selected.
+
+    ks app
+
+Opens KeepSake in its own window (a Microsoft Edge or Google Chrome app window; the default
+browser if neither is found). Everything stays on this laptop: a small web server, reachable only
+from this laptop (127.0.0.1) and only with a secret key made at every start, shows the interface
+(app/ui) and runs the same steps as the commands:
+
+    ks prepare  ->  ks cull  ->  ks apply           (read, choose, copy)
+
+so a stopped run carries on where it stopped. The photo drive is only ever read.
+In the gallery a person can move any photo between Selected and Not selected; the file moves
+with it, and a later cull of the same wedding keeps that person's choice.
+
+The studio's own branding is kept on this laptop, never in Git:
+    data\branding\logo.png     its logo (transparent background, for the dark window)
+    data\branding\brand.json   {"name": "...", "tagline": "..."}
+"""
+from __future__ import annotations
+
+import collections
+import json
+import mimetypes
+import os
+import platform
+import random
+import re
+import secrets
+import shutil
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+import webbrowser
+from http import cookies
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from engine import deliver  # noqa: E402
+from engine.catalog import Catalog  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.ingest import cache_path, duration, shoot_for  # noqa: E402
+
+UI_DIR = Path(__file__).resolve().parent / "ui"
+SCRIPTS = ROOT / "scripts"
+BRAND_DIR = DATA_DIR / "branding"
+OUTPUT_ROOT = Path("C:/KeepSake Output") if os.name == "nt" else Path.home() / "KeepSake Output"
+PYTHON = sys.executable
+
+# The steps the window shows, with their share of the whole run (for the overall progress).
+STAGES = [("read", "Reading the photos", 0.30), ("quality", "Sharpness and light", 0.08),
+          ("faces", "Faces, eyes and smiles", 0.24), ("clip", "Understanding every photo", 0.20),
+          ("groups", "Moments and bursts", 0.06), ("choose", "Choosing like your studio", 0.06),
+          ("copy", "Copying into folders", 0.06)]
+PREPARE_STEP = {"ingest": "read", "match": "read", "quality": "quality", "faces": "faces",
+                "clip": "clip", "groups": "groups"}
+PROGRESS = re.compile(r"([\d,]+)\s*/\s*([\d,]+)\s+([\d.]+)%.*?about (.+?) left")
+COPIED = re.compile(r"copied ([\d,]+) files \(([\d,.]+) GB, ([\d,.]+) MB/s\), ([\d,]+) to go")
+COPY_MB_S = 45            # typical speed from a USB photo drive, for the estimate shown before starting
+COPYING = re.compile(r"Copying ([\d,]+) Selected(?: and ([\d,]+) Not selected)?")
+SELECTED_LINE = re.compile(r"^\s*Selected\s+([\d,]+) of ([\d,]+)")
+NOT_SELECTED_LINE = re.compile(r"^\s*Not selected\s+([\d,]+)")
+SHOTS_LINE = re.compile(r"^\s*Shots\s+([\d,]+)")
+STUDIO_LINE = re.compile(r"studio picks in Selected\s+([\d,]+) of ([\d,]+)")
+
+
+def number(text: str) -> int:
+    return int(text.replace(",", ""))
+
+
+def rough(seconds: float) -> str:
+    """An estimate, rounded: '30 min', '1 h 20 min'."""
+    m = max(1, round(seconds / 60))
+    return f"{m} min" if m < 60 else f"{m // 60} h {m % 60:02d} min"
+
+
+def wedding_name(folder: Path) -> str:
+    """'E:\\Sharma Wedding\\Raw' -> 'Sharma Wedding'."""
+    return folder.parent.name if "raw" in folder.name.lower() and folder.parent.name else folder.name
+
+
+# --- The job: prepare -> cull -> apply, one run at a time --------------------------------
+
+class Job:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc: subprocess.Popen | None = None
+        self.thread: threading.Thread | None = None
+        self.reset()
+
+    def reset(self) -> None:
+        self.status = "idle"            # idle / running / done / error / stopped
+        self.folder = self.output = None
+        self.name = ""
+        self.stage = None
+        self.stages = {k: {"key": k, "label": label, "state": "waiting", "done": 0, "total": 0}
+                       for k, label, _ in STAGES}
+        self.eta = ""
+        self.log = collections.deque(maxlen=300)
+        self.started = self.finished = None
+        self.result: dict = {}
+        self.error = ""
+        self.stop_asked = False
+        self.shoot_name = None
+
+    # state for the window
+    def state(self) -> dict:
+        with self.lock:
+            progress = 0.0
+            for k, _, w in STAGES:
+                st = self.stages[k]
+                if st["state"] == "done":
+                    progress += w
+                elif st["state"] == "active" and st["total"]:
+                    progress += w * min(1.0, st["done"] / st["total"])
+            if self.status == "done":
+                progress = 1.0
+            elapsed = (self.finished or time.time()) - self.started if self.started else 0
+            return {"status": self.status, "folder": str(self.folder or ""), "output": str(self.output or ""),
+                    "name": self.name, "stage": self.stage, "stages": list(self.stages.values()),
+                    "progress": round(progress, 4), "eta": self.eta, "elapsed": round(elapsed),
+                    "elapsed_text": duration(elapsed) if self.started else "",
+                    "log": list(self.log)[-12:], "result": self.result, "error": self.error}
+
+    def start(self, folder: Path, output: Path, keep: float | None, copy_not_selected: bool) -> None:
+        with self.lock:
+            if self.status == "running":
+                raise RuntimeError("KeepSake is already working on a wedding.")
+        self.reset()
+        self.folder, self.output, self.name = folder, output, wedding_name(folder)
+        self.shoot_name = shoot_for(folder).name
+        self.status, self.started = "running", time.time()
+        self.thread = threading.Thread(target=self.run, args=(keep, copy_not_selected), daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_asked = True
+        proc = self.proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
+    def enter(self, key: str) -> None:
+        with self.lock:
+            order = [k for k, _, _ in STAGES]
+            for k in order[:order.index(key)]:
+                self.stages[k]["state"] = "done"
+            if self.stages[key]["state"] != "done":
+                self.stages[key]["state"] = "active"
+            self.stage, self.eta = key, ""
+
+    def run(self, keep: float | None, copy_not_selected: bool) -> None:
+        try:
+            self.enter("read")
+            if self.command(["prepare.py", str(self.folder)], self.on_prepare_line) != 0:
+                raise StepFailed("Reading the photos stopped")
+            self.enter("choose")
+            args = ["cull.py", str(self.folder)] + (["--keep", f"{keep * 100:g}"] if keep else [])
+            if self.command(args, self.on_cull_line) != 0:
+                raise StepFailed("Choosing stopped")
+            self.enter("copy")
+            args = ["apply.py", str(self.folder), str(self.output)]
+            if not copy_not_selected:
+                args += ["--removed", "list"]
+            if self.command(args, self.on_apply_line) != 0:
+                raise StepFailed("Copying stopped")
+            with self.lock:
+                for st in self.stages.values():
+                    st["state"] = "done"
+                self.result.update({"output": str(self.output),
+                                    "selected_dir": str(self.output / "Selected"),
+                                    "not_selected_dir": str(self.output / "Not selected"),
+                                    "copied_not_selected": copy_not_selected})
+                self.result.update(counts(self.shoot_name))      # includes photos moved by hand earlier
+                self.status, self.finished = "done", time.time()
+                self.result["time"] = duration(self.finished - self.started)
+        except StepFailed as e:
+            with self.lock:
+                self.finished = time.time()
+                if self.stop_asked:
+                    self.status, self.error = "stopped", "Stopped. Start again any time: KeepSake carries on where it stopped."
+                else:
+                    last = next((line for line in reversed(self.log) if line.strip()), "")
+                    self.status, self.error = "error", f"{e}: {last}"
+        except Exception as e:                      # never leave the window waiting
+            with self.lock:
+                self.status, self.error, self.finished = "error", f"Something went wrong: {e}", time.time()
+
+    def command(self, args: list[str], on_line) -> int:
+        if self.stop_asked:
+            return 1
+        cmd = [PYTHON, str(SCRIPTS / args[0])] + args[1:]
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     encoding="utf-8", errors="replace", bufsize=1, creationflags=flags,
+                                     env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1"})
+        for line in self.proc.stdout:            # text mode: '\r' progress updates arrive as lines
+            line = line.rstrip()
+            if not line:
+                continue
+            with self.lock:
+                self.log.append(line.strip())
+            on_line(line)
+        return self.proc.wait()
+
+    def progress(self, line: str) -> None:
+        m = PROGRESS.search(line)
+        if m and self.stage:
+            with self.lock:
+                st = self.stages[self.stage]
+                st["done"], st["total"] = number(m.group(1)), number(m.group(2))
+                self.eta = m.group(4).strip()
+
+    def on_prepare_line(self, line: str) -> None:
+        m = re.match(r"^\s{2}- (\w+)\s*$", line)          # prepare.py: "  - quality"
+        if m and m.group(1) in PREPARE_STEP:
+            self.enter(PREPARE_STEP[m.group(1)])
+            return
+        self.progress(line)
+
+    def on_cull_line(self, line: str) -> None:
+        with self.lock:
+            for pattern, keys in ((SELECTED_LINE, ("selected", "total")), (NOT_SELECTED_LINE, ("not_selected",)),
+                                  (SHOTS_LINE, ("shots",)), (STUDIO_LINE, ("studio_in_selected", "studio_picks"))):
+                m = pattern.search(line)
+                if m:
+                    for k, g in zip(keys, m.groups()):
+                        self.result[k] = number(g)
+
+    def on_apply_line(self, line: str) -> None:
+        m = COPYING.search(line)
+        with self.lock:
+            st = self.stages["copy"]
+            if m:
+                st["total"] = number(m.group(1)) + (number(m.group(2)) if m.group(2) else 0)
+            m = COPIED.search(line)
+            if m:
+                done, gb, rate, left = number(m.group(1)), float(m.group(2).replace(",", "")), \
+                    float(m.group(3).replace(",", "")), number(m.group(4))
+                st["done"], st["total"] = done, max(st["total"], done + left)
+                if done and rate:
+                    self.eta = duration(left * gb * 1000 / done / rate)
+
+
+class StepFailed(Exception):
+    pass
+
+
+JOB = Job()
+
+
+# --- Photos for the window -----------------------------------------------------------------
+
+def catalogs() -> list[Path]:
+    return sorted(CACHE_DIR.glob("*/catalog.db"))
+
+
+def read_db(db: Path, sql: str, args=()) -> list:
+    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=5)
+    try:
+        return con.execute(sql, args).fetchall()
+    finally:
+        con.close()
+
+
+def recent_weddings() -> list[dict]:
+    out = []
+    for db in catalogs():
+        try:
+            root = (read_db(db, "SELECT value FROM info WHERE key = 'root'") or [[None]])[0][0]
+            n = read_db(db, "SELECT COUNT(*) FROM photos WHERE status = 'done'")[0][0]
+        except sqlite3.Error:
+            continue
+        if root and n:
+            out.append({"name": wedding_name(Path(root)), "folder": root, "photos": n,
+                        "ready": Path(root).is_dir()})
+    return sorted(out, key=lambda r: r["name"].lower())
+
+
+def thumbs(shoot: str, which: str, n: int) -> list[str]:
+    """URLs of up to n thumbnails of one prepared wedding: any, selected or not selected."""
+    db = CACHE_DIR / shoot / "catalog.db"
+    if not db.exists():
+        return []
+    try:
+        if which in ("selected", "not_selected"):
+            want = "selected" if which == "selected" else "removed"
+            ids = [r[0] for r in read_db(db, "SELECT id FROM cull WHERE decision = ?", (want,))]
+        else:
+            ids = [r[0] for r in read_db(db, "SELECT id FROM photos WHERE status = 'done'")]
+    except sqlite3.Error:
+        return []
+    random.Random(len(ids)).shuffle(ids)
+    out = []
+    for pid in ids:
+        if cache_path(CACHE_DIR / shoot, "thumbs", pid).exists():
+            out.append(f"/photo/{shoot}/{pid}")
+            if len(out) >= n:
+                break
+    return out
+
+
+def gallery(shoot: str, which: str) -> list[dict]:
+    """Every selected (or not selected) photo of the current wedding, in time order, with its file
+    name and KeepSake's reason, for the gallery and the big view."""
+    db = CACHE_DIR / shoot / "catalog.db"
+    want = "selected" if which == "selected" else "removed"
+    try:
+        rows = read_db(db, "SELECT c.id, p.path, COALESCE(c.reason, ''), c.changed FROM cull c "
+                           "JOIN photos p ON p.id = c.id WHERE c.decision = ? ORDER BY p.taken_s, p.path",
+                       (want,)) if db.exists() else []
+    except sqlite3.Error:
+        return []
+    return [{"id": pid, "u": f"/photo/{shoot}/{pid}", "name": Path(path).name, "reason": reason, "moved": bool(changed)}
+            for pid, path, reason, changed in rows if cache_path(CACHE_DIR / shoot, "thumbs", pid).exists()]
+
+
+def counts(shoot: str | None) -> dict:
+    """Selected / Not selected / moved by hand (and the studio's picks found, when known), from the catalog."""
+    db = CACHE_DIR / (shoot or "") / "catalog.db"
+    if not shoot or not db.exists():
+        return {}
+    try:
+        sel, total, moved = read_db(db, "SELECT COALESCE(SUM(decision = 'selected'), 0), COUNT(*), "
+                                        "COALESCE(SUM(changed), 0) FROM cull")[0]
+        picks, found = read_db(db, "SELECT COUNT(*), COALESCE(SUM(c.decision = 'selected'), 0) FROM labels l "
+                                   "JOIN cull c ON c.id = l.id WHERE l.selected = 1")[0]
+    except sqlite3.Error:
+        return {}
+    out = {"selected": sel, "not_selected": total - sel, "total": total, "moved": moved}
+    if picks:
+        out.update(studio_picks=picks, studio_in_selected=found)
+    return out
+
+
+# --- A person's change: move one photo between Selected and Not selected ---------------------
+
+class MoveError(Exception):
+    """Why a photo could not be moved, in plain words."""
+
+
+MOVE_LOCK = threading.Lock()
+BEFORE_MOVE: dict[tuple[str, int], tuple] = {}      # KeepSake's own verdict, so Undo puts it back exactly
+
+
+def move_photo(pid: int, to: str) -> dict:
+    """Move one photo (and its RAW/JPEG companion) of the finished wedding to Selected or Not
+    selected. Its copy moves between the two folders; a photo that was only listed is copied from
+    the drive (read only, checksum checked, as in ks apply). Nothing is ever deleted."""
+    if to not in ("selected", "not_selected"):
+        raise MoveError("Choose Selected or Not selected.")
+    with JOB.lock:
+        if JOB.status != "done" or not JOB.shoot_name:
+            raise MoveError("Finish culling this wedding first.")
+        shoot, root, out = JOB.shoot_name, Path(JOB.folder), Path(JOB.output)
+    decision = "selected" if to == "selected" else "removed"
+    folder = deliver.SELECTED if to == "selected" else deliver.NOT_SELECTED
+    with MOVE_LOCK, Catalog(CACHE_DIR / shoot / "catalog.db") as cat:
+        row = cat.db.execute("SELECT p.path, p.companion, c.decision, c.unsure, c.reason, c.changed "
+                             "FROM cull c JOIN photos p ON p.id = c.id WHERE c.id = ?", (pid,)).fetchone()
+        if row is None:
+            raise MoveError("That photo is not part of this wedding.")
+        path, companion, now, unsure, reason, changed = row
+        if now != decision:
+            before = BEFORE_MOVE.setdefault((shoot, pid), (now, unsure, reason, changed))
+            back = before[0] == decision and not before[3]          # Undo: KeepSake's own verdict again
+            earlier = deliver.read_manifest(out).get(path, {})
+            has_copy = bool(earlier.get("copy")) and (out / earlier["copy"]).exists()
+            if folder == deliver.SELECTED and not has_copy and not root.is_dir():
+                raise MoveError("Plug in the photo drive first: this photo is copied from it into Selected.")
+            job = deliver.Job(pid, folder, before[1] if back else 0, (before[2] or "") if back else "moved by you",
+                              path, folder == deliver.SELECTED)
+            try:
+                deliver.apply(root, out, [(job, companion)], progress=lambda _line: None)
+            except (deliver.OutputError, OSError) as e:
+                raise MoveError(f"Could not move {Path(path).name}: {e}") from e
+            if back:
+                with cat.db:
+                    cat.db.execute("UPDATE cull SET decision = ?, unsure = ?, reason = ?, changed = 0 WHERE id = ?",
+                                   (decision, before[1], before[2], pid))
+                BEFORE_MOVE.pop((shoot, pid), None)
+            else:
+                cat.move([pid], decision)
+    result = counts(shoot)
+    with JOB.lock:
+        JOB.result.update(result)
+    return {"ok": True, "id": pid, "to": to, "result": result}
+
+
+def brand() -> dict:
+    info = {"name": "", "tagline": "", "logo": ""}
+    try:
+        info.update(json.loads((BRAND_DIR / "brand.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        pass
+    for name in ("logo.png", "logo.jpg", "logo.svg"):
+        if (BRAND_DIR / name).exists():
+            info["logo"] = f"/brand/{name}"
+            break
+    for name in ("background.jpg", "background.png"):          # optional: a real mandap photo behind the scene
+        if (BRAND_DIR / name).exists():
+            info["background"] = f"/brand/{name}"
+            break
+    return info
+
+
+def choose_folder(title: str, start: str = "") -> str:
+    """The system's folder dialog (in its own small process, so the server never blocks)."""
+    code = ("import sys, tkinter as tk\nfrom tkinter import filedialog\nr = tk.Tk(); r.withdraw()\n"
+            "r.attributes('-topmost', True)\n"
+            "p = filedialog.askdirectory(title=sys.argv[1], initialdir=sys.argv[2] or None, mustexist=False)\n"
+            "print(p or '')\n")
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        r = subprocess.run([PYTHON, "-c", code, title, start], capture_output=True, text=True, timeout=600,
+                           creationflags=flags)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    path = r.stdout.strip()
+    return str(Path(path)) if path else ""
+
+
+def open_folder(path: Path) -> None:
+    if os.name == "nt":
+        os.startfile(str(path))                                  # noqa: S606 (our own output folder)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
+# --- The local web server --------------------------------------------------------------------
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "KeepSake"
+    token = ""
+
+    def log_message(self, *args) -> None:        # quiet console
+        pass
+
+    def allowed(self) -> bool:
+        if self.headers.get("X-KeepSake") == self.token:
+            return True
+        jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        return "ks" in jar and jar["ks"].value == self.token
+
+    def send(self, code: int, body: bytes, kind: str, extra: dict | None = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store" if kind.startswith("application/json") else "max-age=3600")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def json(self, data, code: int = 200) -> None:
+        self.send(code, json.dumps(data).encode(), "application/json; charset=utf-8")
+
+    def file(self, path: Path) -> None:
+        if not path.is_file():
+            return self.send(404, b"not found", "text/plain")
+        kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if path.suffix in (".otf", ".ttf"):
+            kind = "font/otf" if path.suffix == ".otf" else "font/ttf"
+        self.send(200, path.read_bytes(), kind)
+
+    def do_GET(self) -> None:
+        url = urlparse(self.path)
+        q = parse_qs(url.query)
+        if url.path in ("/", "/index.html"):
+            if q.get("t", [""])[0] != self.token and not self.allowed():
+                return self.send(403, b"Open KeepSake with:  ks app", "text/plain")
+            body = (UI_DIR / "index.html").read_bytes()
+            return self.send(200, body, "text/html; charset=utf-8",
+                             {"Set-Cookie": f"ks={self.token}; Path=/; HttpOnly; SameSite=Strict"})
+        if not self.allowed():
+            return self.send(403, b"forbidden", "text/plain")
+        if url.path.startswith("/ui/"):
+            target = (UI_DIR / unquote(url.path[4:])).resolve()
+            if UI_DIR.resolve() in target.parents:
+                return self.file(target)
+            return self.send(404, b"not found", "text/plain")
+        if url.path.startswith("/brand/"):
+            name = Path(unquote(url.path[7:])).name
+            return self.file(BRAND_DIR / name)
+        m = re.match(r"^/photo/([\w\-]+)/(\d+)(?:/(big))?$", url.path)
+        if m:
+            kind = "analysis" if m.group(3) else "thumbs"
+            return self.file(cache_path(CACHE_DIR / m.group(1), kind, int(m.group(2))))
+        if url.path == "/api/state":
+            return self.json(JOB.state())
+        if url.path == "/api/home":
+            weddings = recent_weddings()
+            sample = []
+            if weddings:
+                db = random.choice(catalogs())
+                sample = thumbs(db.parent.name, "any", 48)
+            return self.json({"brand": brand(), "recent": weddings, "sample": sample,
+                              "output_root": str(OUTPUT_ROOT), "computer": platform.node()})
+        if url.path == "/api/gallery":
+            shoot = JOB.shoot_name or ""
+            return self.json({"photos": gallery(shoot, q.get("set", ["selected"])[0]) if shoot else []})
+        if url.path == "/api/thumbs":
+            shoot = JOB.shoot_name or ""
+            which = q.get("set", ["any"])[0]
+            n = min(int(q.get("n", ["40"])[0]), 400)
+            return self.json({"photos": thumbs(shoot, which, n) if shoot else []})
+        return self.send(404, b"not found", "text/plain")
+
+    def do_POST(self) -> None:
+        if not self.allowed():
+            return self.send(403, b"forbidden", "text/plain")
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            data = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return self.json({"error": "bad request"}, 400)
+        path = urlparse(self.path).path
+        if path == "/api/choose":
+            title = "Choose the wedding's photo folder" if data.get("kind") != "output" else "Choose where to save"
+            return self.json({"path": choose_folder(title, data.get("start", ""))})
+        if path == "/api/check":
+            folder = Path(data.get("folder", "").strip().strip('"'))
+            ok = bool(data.get("folder")) and folder.is_dir()
+            name = wedding_name(folder) if ok else ""
+            out = OUTPUT_ROOT / name if ok else None
+            free = shutil.disk_usage(out.anchor if out else OUTPUT_ROOT.anchor).free if ok else 0
+            prepared = ok and shoot_for(folder).db.exists()
+            photos, size = 0, 0
+            if prepared:
+                try:
+                    photos, size = read_db(shoot_for(folder).db, "SELECT COUNT(*), COALESCE(SUM(bytes), 0) "
+                                                                 "FROM photos WHERE status = 'done'")[0]
+                except sqlite3.Error:
+                    pass
+            not_gb = size * 0.9 / 1e9                                   # about 9 in 10 photos are not selected
+            return self.json({"ok": ok, "name": name, "output": str(out or ""), "prepared": prepared,
+                              "free_gb": round(free / 1e9, 1), "photos": photos, "total_gb": round(size / 1e9, 1),
+                              "not_selected_gb": round(not_gb, 1),
+                              "not_selected_time": rough(not_gb * 1000 / COPY_MB_S) if size else "",
+                              "error": "" if ok else "Folder not found. Is the drive connected?"})
+        if path == "/api/start":
+            folder = Path(data.get("folder", "").strip().strip('"'))
+            if not folder.is_dir():
+                return self.json({"error": "Folder not found. Is the drive connected?"}, 400)
+            output = Path(data.get("output") or OUTPUT_ROOT / wedding_name(folder))
+            keep = data.get("keep")
+            keep = float(keep) if keep not in (None, "", "studio") else None
+            try:
+                JOB.start(folder, output, keep, bool(data.get("copy_not_selected", True)))
+            except RuntimeError as e:
+                return self.json({"error": str(e)}, 409)
+            return self.json(JOB.state())
+        if path == "/api/stop":
+            JOB.stop()
+            return self.json(JOB.state())
+        if path == "/api/reset":
+            if JOB.status != "running":
+                JOB.reset()
+            return self.json(JOB.state())
+        if path == "/api/move":
+            try:
+                return self.json(move_photo(int(data.get("id", -1)), str(data.get("to", ""))))
+            except (MoveError, ValueError, TypeError) as e:
+                return self.json({"error": str(e) or "bad request"}, 400)
+        if path == "/api/open":
+            which = data.get("which")
+            target = {"selected": JOB.result.get("selected_dir"), "not_selected": JOB.result.get("not_selected_dir"),
+                      "output": JOB.result.get("output")}.get(which)
+            if target and Path(target).is_dir():
+                open_folder(Path(target))
+                return self.json({"ok": True})
+            return self.json({"error": "That folder is not there yet."}, 404)
+        return self.json({"error": "unknown"}, 404)
+
+
+def make_server(port: int = 0) -> ThreadingHTTPServer:
+    Handler.token = secrets.token_urlsafe(24)
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.daemon_threads = True
+    return server
+
+
+def app_window(url: str) -> subprocess.Popen | None:
+    """KeepSake in its own window: Edge or Chrome in app mode (no address bar)."""
+    profile = DATA_DIR / "app_window"
+    candidates = []
+    if os.name == "nt":
+        for base in (os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                     os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("LOCALAPPDATA", "")):
+            candidates += [Path(base) / "Microsoft/Edge/Application/msedge.exe",
+                           Path(base) / "Google/Chrome/Application/chrome.exe"]
+    elif sys.platform == "darwin":
+        candidates += [Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                       Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")]
+    else:
+        candidates += [Path(p) for p in (shutil.which("chromium") or "", shutil.which("google-chrome") or "") if p]
+    for exe in candidates:
+        if exe.is_file():
+            return subprocess.Popen([str(exe), f"--app={url}", f"--user-data-dir={profile}",
+                                     "--window-size=1440,900", "--no-first-run", "--no-default-browser-check"])
+    webbrowser.open(url)
+    return None
+
+
+def main() -> int:
+    server = make_server(int(os.environ.get("KEEPSAKE_APP_PORT", "0")))
+    url = f"http://127.0.0.1:{server.server_port}/?t={Handler.token}"
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print("KeepSake is open in its own window.")
+    print("Keep this window open while KeepSake works; close the KeepSake window when you are done.")
+    print(f"(If the window did not open, paste this into Edge or Chrome:  {url} )")
+    window = None if "--no-window" in sys.argv else app_window(url)
+    try:
+        if window is not None:
+            window.wait()
+            while JOB.status == "running":          # the window was closed while working: finish first
+                print("The window was closed; KeepSake finishes the current wedding first...", end="\r")
+                time.sleep(2)
+        else:
+            while True:
+                time.sleep(3600)
+    except KeyboardInterrupt:
+        JOB.stop()
+    server.shutdown()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

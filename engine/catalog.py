@@ -192,7 +192,8 @@ class Catalog:
     def _add_missing_columns(self) -> None:
         """Catalogs made by an older KeepSake get the columns added since (data is kept)."""
         added = {"faces": [("subject", "INTEGER"), ("eyes", "TEXT"), ("lm", "BLOB"), ("emb", "BLOB"),
-                           ("person", "INTEGER")]}
+                           ("person", "INTEGER")],
+                 "cull": [("changed", "INTEGER NOT NULL DEFAULT 0")]}
         for table, columns in added.items():
             have = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
             for name, kind in columns:
@@ -398,17 +399,21 @@ class Catalog:
         return len(rows)
 
     def save_cull(self, rows: list[tuple], settings: dict) -> None:
-        """rows: (id, decision, unsure, score, reason, similar)."""
+        """rows: (id, decision, unsure, score, reason, similar). Photos a person moved by hand
+        (in the app's gallery) keep that person's choice: a new cull never overrules them."""
         import json
         with self.db:
+            by_hand = self.db.execute("SELECT id, decision FROM cull WHERE changed = 1").fetchall()
             self.db.execute("DELETE FROM cull")
             self.db.executemany("INSERT INTO cull (id, decision, unsure, score, reason, similar) "
                                 "VALUES (?, ?, ?, ?, ?, ?)", rows)
+            self.db.executemany("UPDATE cull SET decision = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",
+                                [(decision, "moved by you", pid) for pid, decision in by_hand])
             self.db.execute("INSERT OR REPLACE INTO info (key, value) VALUES ('cull', ?)",
                             (json.dumps(settings),))
 
     def move(self, photo_ids: list[int], decision: str) -> int:
-        """A person's change: these photos go to Selected or Removed."""
+        """A person's change: these photos go to Selected ('selected') or Not selected ('removed')."""
         with self.db:
             cur = self.db.executemany(
                 "UPDATE cull SET decision = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",

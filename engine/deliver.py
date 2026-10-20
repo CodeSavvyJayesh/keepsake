@@ -1,7 +1,7 @@
-"""Phase 4: delivering the cull - Selected and Removed folders on this laptop, and undo.
+"""Phase 4: delivering the cull - Selected and Not selected folders on this laptop, and undo.
 
 The photo drive is only ever read. Every original is copied into the output folder
-(Selected/... or Removed/..., keeping its event folders and file name) like this:
+(Selected/... or Not selected/..., keeping its event folders and file name) like this:
   1. note the original's size and date,
   2. read it once, writing the copy and computing its SHA-256 checksum at the same time,
   3. read the copy back and compute its checksum again: both must be equal,
@@ -23,6 +23,7 @@ from pathlib import Path
 from .catalog import Catalog
 from .config import DATA_DIR
 
+SELECTED, NOT_SELECTED = "Selected", "Not selected"     # the two output folders
 MANIFEST = "KeepSake manifest.csv"
 README = "KeepSake read me.txt"
 PART = ".keepsake-part"
@@ -42,7 +43,7 @@ class SourceChanged(Exception):
 @dataclass
 class Job:
     photo_id: int
-    folder: str               # 'Selected' / 'Removed'
+    folder: str               # 'Selected' / 'Not selected'
     unsure: int
     reason: str
     original: str             # relative to the shoot folder
@@ -53,7 +54,7 @@ class Job:
 class ApplyReport:
     copied: int = 0
     skipped: int = 0          # already there from an earlier run
-    moved: int = 0            # copied earlier, moved since between Selected and Removed
+    moved: int = 0            # copied earlier, moved since between Selected and Not selected
     listed: int = 0
     bytes: int = 0
     seconds: float = 0.0
@@ -91,8 +92,8 @@ def jobs_from(cat: Catalog, removed: str = "copy") -> list[tuple[Job, str | None
     for pid, path, companion, decision, unsure, reason in cat.db.execute(
             "SELECT p.id, p.path, p.companion, c.decision, c.unsure, COALESCE(c.reason, '') "
             "FROM cull c JOIN photos p ON p.id = c.id ORDER BY p.path"):
-        folder = "Selected" if decision == "selected" else "Removed"
-        copy = folder == "Selected" or removed == "copy"
+        folder = SELECTED if decision == "selected" else NOT_SELECTED
+        copy = folder == SELECTED or removed == "copy"
         out.append((Job(pid, folder, unsure, reason, path, copy), companion))
     return out
 
@@ -141,7 +142,7 @@ def read_manifest(out: Path) -> dict[str, dict]:
 
 
 def apply(root: Path, out: Path, jobs: list[tuple[Job, str | None]], progress=print) -> ApplyReport:
-    """Copy (or list) every photo into out/Selected and out/Removed. Safe to run again."""
+    """Copy (or list) every photo into out/Selected and out/Not selected. Safe to run again."""
     check_output(root, out)
     done = read_manifest(out)
     files: list[tuple[Job, str]] = []
@@ -162,7 +163,7 @@ def apply(root: Path, out: Path, jobs: list[tuple[Job, str | None]], progress=pr
     if need + SPARE_BYTES > free:
         raise OutputError(f"Not enough space on this laptop: the copies need {need / 1e9:,.1f} GB, "
                           f"{free / 1e9:,.1f} GB is free. Free some space, choose another folder, or "
-                          "copy only Selected and list the Removed photos:  --removed list")
+                          "copy only Selected and list the Not selected photos:  --removed list")
     report = ApplyReport()
     new_file = not (out / MANIFEST).exists()
     start = last = time.perf_counter()
@@ -186,7 +187,7 @@ def apply(root: Path, out: Path, jobs: list[tuple[Job, str | None]], progress=pr
                 report.skipped += 1
                 continue
             if earlier and earlier.get("copy") and (out / earlier["copy"]).exists():
-                # moved between Selected and Removed since the last run: move the copy too
+                # moved between Selected and Not selected since the last run: move the copy too
                 dst = out / job.folder / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(out / earlier["copy"], dst)
@@ -247,7 +248,7 @@ def undo(out: Path) -> UndoReport:
             report.removed += 1
         else:
             report.kept_changed.append(row["copy"])
-    for folder in ("Selected", "Removed"):
+    for folder in (SELECTED, NOT_SELECTED, "Removed"):         # "Removed": outputs made before 20 Oct
         base = out / folder
         if base.is_dir():
             for d in sorted((p for p in base.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):

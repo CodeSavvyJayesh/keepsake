@@ -35,6 +35,8 @@ if /i "%CMD%"=="undo" goto undo
 if /i "%CMD%"=="testset" goto testset
 if /i "%CMD%"=="testcull" goto testcull
 if /i "%CMD%"=="blindtest" goto blindtest
+if /i "%CMD%"=="judge" goto judge
+if /i "%CMD%"=="app" goto app
 if /i "%CMD%"=="models" goto models
 if /i "%CMD%"=="test" goto test
 echo Unknown command: %CMD%
@@ -120,6 +122,14 @@ exit /b %errorlevel%
 "%PY%" "%ROOT%scripts\blindtest.py" %2 %3 %4
 exit /b %errorlevel%
 
+:app
+"%PY%" "%ROOT%app\keepsake_app.py" %2 %3
+exit /b %errorlevel%
+
+:judge
+"%PY%" "%ROOT%scripts\judge.py" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
 :models
 "%PY%" "%ROOT%scripts\models.py" %2 %3
 exit /b %errorlevel%
@@ -147,11 +157,13 @@ echo   ks groups "folder"    line up camera clocks, group moments, find the coup
 echo   ks evaluate "folder" ...  how well it learned the studio's taste (honest test)
 echo   ks prepare "folder" ...  all analysis steps for one or many weddings, unattended
 echo   ks cull "folder"      KeepSake decides Selected / Removed, with a reason for each removal
-echo   ks apply "folder" ["output"]  copy into Selected and Removed folders on this laptop (checked)
+echo   ks apply "folder" ["output"]  copy into Selected and Not selected folders on this laptop (checked)
 echo   ks undo "output"      remove what ks apply copied (the originals are never touched)
 echo   ks testset "folder"   a 400-photo folder for the studio's re-pick test
 echo   ks testcull "folder"  KeepSake chooses blind from the same test photos
 echo   ks blindtest          KeepSake chooses blind on every past wedding (selected / removed folders)
+echo   ks judge "folder" --test   Claude checks the re-pick test photos (paid, asks first)
+echo   ks app                KeepSake in its own window: choose a folder, Start, Selected / Not selected
 echo   ks models             download the AI model files (faces, eyes)
 echo   ks test               run the automatic tests
 echo.

@@ -163,7 +163,7 @@ def main() -> int:
              f"  Learned from        {learned}", *how, "",
              f"  Selected            {selected:,} of {total:,} ({selected / max(total, 1):.0%}); "
              f"{d[('selected', 1)]:,} of them AI unsure",
-             f"  Removed             {removed:,} ({removed / max(total, 1):.0%})"]
+             f"  Not selected        {removed:,} ({removed / max(total, 1):.0%})"]
     for kind, n in result.reasons.most_common():
         lines.append(f"    {kind:<44}{n:>7,}")
     if result.unread:

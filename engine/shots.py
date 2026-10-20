@@ -10,6 +10,12 @@ frame of a burst they kept), minus penalties for what an editor never wants: clo
 half-closed eyes and turned heads among the main people.
 Measured on 9 weddings (each decided by a model trained on the other 8): with the same number of
 photos kept, duplicates went from 1,509 to 0 and the studio's shots covered from 26% to 32%.
+
+Upgrade (20 Oct): the frame ranker also sees each main face's own measurements (FACE_DETAILS: how
+shut the eyes are, head turn, face sharpness, smile, open mouth), and which shots are kept also
+uses the photo's full CLIP content (clip_ridge, CLIP_WEIGHT of the score). Blind on 9 weddings:
+the studio's exact photo 1,253 -> 1,327 of 6,229 choices, the studio's moment 1,850 -> 1,933;
+the studio's own frame of a burst 43% -> 45% (chance 36%).
 """
 from __future__ import annotations
 
@@ -20,6 +26,12 @@ import numpy as np
 from .learn import Logistic
 
 SHOT_SIM = 0.90
+CLIP_WEIGHT = 0.3          # share of the photo score from its full CLIP content
+CLIP_RIDGE = 1.0           # how strongly the CLIP content model is held back (regularisation)
+
+FACE_DETAILS = ["n_read", "blink_worst", "blink_mean", "blink_worst_open", "halfblink_n", "closed_n",
+                "unsure_n", "down_n", "side_n", "yaw_max", "yaw_mean", "pitch_max", "sharp_min",
+                "sharp_mean", "smile_min", "smile_mean2", "jaw_max", "squint_max", "lookdown_max", "relw_max"]
 
 
 def group_shots(moment: np.ndarray, clip: np.ndarray, groups: list | None = None) -> np.ndarray:
@@ -42,6 +54,52 @@ def group_shots(moment: np.ndarray, clip: np.ndarray, groups: list | None = None
                         shot[members[b]] = g
                 g += 1
     return shot
+
+
+def face_details(cat, ids: list[int]) -> np.ndarray:
+    """Per photo (rows in the order of `ids`): the main faces' own measurements (FACE_DETAILS),
+    zeros for photos without read faces."""
+    by: dict[int, list] = defaultdict(list)
+    for pid, rel_w, sharp, bl, br, squint, down, smile, jaw, yaw, pitch, eyes in cat.db.execute(
+            "SELECT photo_id, rel_w, sharp, blink_l, blink_r, squint, look_down, smile, jaw_open, yaw, pitch, "
+            "eyes FROM faces WHERE subject = 1 AND read = 1"):
+        by[pid].append((rel_w or 0, sharp or 0, bl or 0, br or 0, squint or 0, down or 0, smile or 0, jaw or 0,
+                        abs(yaw or 0), abs(pitch or 0), eyes or ""))
+    out = np.zeros((len(ids), len(FACE_DETAILS)), np.float32)
+    for row, pid in enumerate(ids):
+        fs = by.get(pid)
+        if not fs:
+            continue
+        a = np.array([f[:10] for f in fs], dtype=float)
+        blink = (a[:, 2] + a[:, 3]) / 2
+        eyes = [f[10] for f in fs]
+        plain = np.array([e in ("open", "unsure", "closed") for e in eyes])   # not smiling, down or side
+        out[row] = [len(fs), blink.max(), blink.mean(), blink[plain].max() if plain.any() else 0,
+                    int(((blink > 0.3) & (blink < 0.55) & plain).sum()), eyes.count("closed"), eyes.count("unsure"),
+                    eyes.count("down"), eyes.count("side"), a[:, 8].max(), a[:, 8].mean(), a[:, 9].max(),
+                    np.log1p(a[:, 1].min()), np.log1p(a[:, 1].mean()), a[:, 6].min(), a[:, 6].mean(), a[:, 7].max(),
+                    a[:, 4].max(), a[:, 5].max(), a[:, 0].max()]
+    return out
+
+
+def centred_clip(clip: np.ndarray, groups) -> np.ndarray:
+    """Unit CLIP vectors minus each wedding's average (removes a wedding's overall look)."""
+    v = clip.astype(np.float64)
+    v = v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
+    groups = np.asarray(groups)
+    for g in set(groups.tolist()):
+        v[groups == g] -= v[groups == g].mean(axis=0)
+    return v
+
+
+def clip_ridge(C: np.ndarray, y: np.ndarray, strength: float = CLIP_RIDGE) -> np.ndarray:
+    """Weights for 'how much this content looks like the studio's picks': class-balanced ridge
+    regression on centred CLIP vectors (closed form, NumPy only). Score = C @ weights."""
+    y = y.astype(np.float64)
+    w = np.where(y == 1, (len(y) - y.sum()) / max(y.sum(), 1), 1.0)
+    lam = strength * w.sum() / C.shape[1]
+    target = y - np.average(y, weights=w)
+    return np.linalg.solve(C.T @ (C * w[:, None]) + lam * np.eye(C.shape[1]), C.T @ (w * target))
 
 
 def relative_to_shot(X: np.ndarray, shot: np.ndarray) -> np.ndarray:

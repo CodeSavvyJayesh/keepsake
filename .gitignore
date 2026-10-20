@@ -3,6 +3,11 @@ data/
 _culling/
 tools/
 
+# API keys, anywhere
+anthropic_key.txt
+*.key
+.env
+
 # Photo and video files anywhere, as a safety net
 *.cr2
 *.cr3

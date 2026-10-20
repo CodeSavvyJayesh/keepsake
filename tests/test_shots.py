@@ -56,7 +56,7 @@ def test_blind_test_on_all_weddings(tmp_path, monkeypatch):
     run = next((tmp_path / "out").iterdir())
     one = run / "wedding_one"
     sel = next(one.glob("KeepSake selected (*)"))
-    rem = next(one.glob("KeepSake removed (*)"))
+    rem = next(one.glob("KeepSake not selected (*)"))
     n_sel, n_rem = len(list(sel.iterdir())), len(list(rem.iterdir()))
     assert n_sel + n_rem == 60 and n_sel == int(sel.name.split("(")[1].rstrip(")"))
     assert "All weddings" in (run / "Summary.txt").read_text()
@@ -66,3 +66,36 @@ def test_blind_test_on_all_weddings(tmp_path, monkeypatch):
     assert len(list(studio.iterdir())) == int(studio.name.split("(")[1].rstrip(")"))
     both = next(one.glob("Selected by both (*)"))
     assert {p.name for p in both.iterdir()} == {p.name for p in studio.iterdir()} & {p.name for p in sel.iterdir()}
+
+
+def test_each_main_face_is_measured_for_the_frame_choice(tmp_path):
+    from engine.catalog import Catalog
+    from engine.shots import FACE_DETAILS, face_details
+    cat = Catalog(tmp_path / "c.db")
+    for pid in (1, 2, 3):
+        cat.db.execute("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status) "
+                       "VALUES (?, ?, '', 'jpeg', 1, 1, 'done')", (pid, f"IMG_{pid}.JPG"))
+    faces = [(1, 0, 0.1, 300, 0.05, 0.07, 0.4, 0.1, 0.8, 0.0, 5, 3, "smiling"),     # open, smiling
+             (1, 1, 0.08, 200, 0.45, 0.40, 0.3, 0.1, 0.2, 0.1, 40, 2, "unsure"),    # half blink, turned
+             (2, 0, 0.1, 250, 0.9, 0.85, 0.2, 0.1, 0.1, 0.0, 2, 1, "closed")]       # blink
+    cat.db.executemany("INSERT INTO faces (photo_id, n, rel_w, sharp, blink_l, blink_r, squint, look_down, smile, "
+                       "jaw_open, yaw, pitch, eyes, subject, read) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,1)", faces)
+    cat.db.commit()
+    F = face_details(cat, [1, 2, 3])
+    c = {n: i for i, n in enumerate(FACE_DETAILS)}
+    assert F[0, c["n_read"]] == 2 and F[0, c["halfblink_n"]] == 1 and F[0, c["yaw_max"]] == 40
+    assert F[1, c["closed_n"]] == 1 and F[1, c["blink_worst"]] > 0.8
+    assert not F[2].any()                                                        # no faces: zeros
+
+
+def test_full_clip_content_learns_what_the_studio_keeps():
+    from engine.shots import centred_clip, clip_ridge
+    rng = np.random.default_rng(2)
+    liked = unit(rng.normal(size=512))
+    C = unit(rng.normal(size=(600, 512)))
+    y = (rng.random(600) < 0.1).astype(int)
+    C[y == 1] = unit(C[y == 1] + 0.5 * liked)
+    Cc = centred_clip(C, ["a"] * 300 + ["b"] * 300)
+    w = clip_ridge(Cc[:400], y[:400])
+    s = Cc[400:] @ w
+    assert s[y[400:] == 1].mean() > s[y[400:] == 0].mean() + 2 * s.std() / 3
