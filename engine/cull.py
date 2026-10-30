@@ -37,7 +37,9 @@ import numpy as np
 
 from .catalog import Catalog
 from .learn import GBM, Dataset, Logistic, combine, lightgbm_available, photo_features
-from .shots import (CLIP_WEIGHT, FACE_DETAILS, centred_clip, clip_ridge, face_details, frame_penalty, group_shots,
+from .shots import (CLIP_WEIGHT, FACE_DETAILS, FAULT_FRAME_W, FAULT_SHOT_W, SHORTLIST_FAULT_W, centred_clip, clip_ridge,
+                    face_details, face_faults, shortlist,
+                    fault_words, frame_penalty, group_shots,
                     one_per_shot, relative_to_shot, train_frame_ranker)
 
 TARGET = 0.95              # catch this share of what the studio would pick...
@@ -205,14 +207,18 @@ def why_not_this_frame(X: np.ndarray, names: list[str], i: int, best: int) -> st
 
 
 def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], keep_share: float | None,
-                 make_model, model_name: str) -> CullResult:
-    """Selected like the studio's: its usual share of photos, one per shot, the best frame of each."""
+                 make_model, model_name: str, wide: float = 1.0, target: float | None = None) -> CullResult:
+    """Selected like the studio's: its usual share of photos (times `wide` for a bigger Selected that
+    catches more of the studio's picks), one per shot, the best frame of each, and no main person
+    with closed or half-closed eyes or a face turned to the side when the moment has a better frame.
+    With `target` (Shortlist): as many moments as it takes to hold that share of the studio's picks
+    (see engine/shots.py shortlist), so Selected is bigger but holds most of what the studio wants."""
     data = combine(train + [me], by_wedding=True)
     wedding = np.array(data.group)
     mine = np.flatnonzero(wedding == name)
     rows = np.flatnonzero((wedding != name) & (data.y >= 0))
     model = make_model().fit(data.X[rows], data.y[rows])
-    my_events = list(me.group)
+    my_events = [name] * len(mine)            # scored against the whole wedding, as the blind test measures it
     score = np.zeros(len(data.y))
     C = centred_clip(data.clip, wedding)                      # + the photo's full content (CLIP)
     content = clip_ridge(C[rows], data.y[rows])
@@ -224,11 +230,18 @@ def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], kee
     R = relative_to_shot(np.hstack([data.X, details]), shot)  # best frame: + each main face's details
     ranker = train_frame_ranker(R, data.y, shot, rows)
     frame = np.zeros(len(data.y))
+    faults = np.zeros(len(data.y), np.int8)
+    faults[mine] = face_faults(cat, list(me.ids))
+    bad = (faults > 0).astype(float)
     frame[mine] = (ranker.predict(R[mine]) if ranker is not None else score[mine]) \
-        - frame_penalty(data.X[mine], data.names)
-    share = keep_share if keep_share is not None else float(data.y[rows].mean())
+        - frame_penalty(data.X[mine], data.names) - FAULT_FRAME_W * bad[mine]
+    share = (keep_share if keep_share is not None else float(data.y[rows].mean())) * wide
     n_me = len(mine)
-    chosen, kept_in = one_per_shot(mine, score, frame, shot, max(1, int(round(share * n_me))))
+    if target:
+        chosen, kept_in = shortlist(mine, score - SHORTLIST_FAULT_W * bad, frame, shot, target)
+        share = len(chosen) / max(n_me, 1)
+    else:
+        chosen, kept_in = one_per_shot(mine, score - FAULT_SHOT_W * bad, frame, shot, max(1, int(round(share * n_me))))
     local = {g: k for k, g in enumerate(mine)}
     keep = np.zeros(n_me, bool)
     keep[[local[g] for g in chosen]] = True
@@ -248,9 +261,12 @@ def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], kee
         best = kept_in.get(g)
         if best is not None:
             best_pid = me.ids[local[best]]
+            words = fault_words(int(faults[g])) if faults[g] and not faults[best] else ""
             reason = (f"Same shot as {names[best_pid]}, which is kept"
-                      f"{why_not_this_frame(data.X, data.names, g, best)}")
+                      + (f" - {words} in this one" if words else why_not_this_frame(data.X, data.names, g, best)))
             similar = best_pid
+        elif faults[g]:
+            reason, similar = fault_words(int(faults[g])).capitalize(), None
         else:
             reason, similar = why[k]
         reasons[reason_kind(reason)] += 1
@@ -269,7 +285,8 @@ def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], kee
 
 
 def cull_shoot(cat: Catalog, name: str, others: list[Path], target: float = TARGET,
-               keep_share: float | None = None, make_model=None, style: str = "studio") -> CullResult:
+               keep_share: float | None = None, make_model=None, style: str = "studio", wide: float = 1.0,
+               shortlist_target: float | None = None) -> CullResult:
     """Decide Selected / Removed for every photo of one shoot (does not save anything).
     style 'studio': one photo per shot, the studio's usual share (needs other weddings; with
     none, the safe style is used). style 'safe': the 95% shortlist."""
@@ -289,7 +306,7 @@ def cull_shoot(cat: Catalog, name: str, others: list[Path], target: float = TARG
         if ds.clip is not None and (ds.y == 1).any():
             train.append(ds)
     if train and style == "studio":
-        return studio_style(cat, name, me, train, keep_share, make_model, model_name)
+        return studio_style(cat, name, me, train, keep_share, make_model, model_name, wide, shortlist_target)
     data = combine(train + [me], by_wedding=False)
     wedding = np.array([d.meta["wedding"] for d in train + [me] for _ in d.ids])
     events = data.group

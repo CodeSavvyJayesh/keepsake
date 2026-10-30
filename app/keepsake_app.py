@@ -62,6 +62,7 @@ PREPARE_STEP = {"ingest": "read", "match": "read", "quality": "quality", "faces"
                 "clip": "clip", "groups": "groups"}
 PROGRESS = re.compile(r"([\d,]+)\s*/\s*([\d,]+)\s+([\d.]+)%.*?about (.+?) left")
 COPIED = re.compile(r"copied ([\d,]+) files \(([\d,.]+) GB, ([\d,.]+) MB/s\), ([\d,]+) to go")
+WIDE = 1.5                # "Wider": 1.5x the studio's usual share, so Selected holds more of the studio's own picks
 COPY_MB_S = 45            # typical speed from a USB photo drive, for the estimate shown before starting
 COPYING = re.compile(r"Copying ([\d,]+) Selected(?: and ([\d,]+) Not selected)?")
 SELECTED_LINE = re.compile(r"^\s*Selected\s+([\d,]+) of ([\d,]+)")
@@ -128,7 +129,7 @@ class Job:
                     "elapsed_text": duration(elapsed) if self.started else "",
                     "log": list(self.log)[-12:], "result": self.result, "error": self.error}
 
-    def start(self, folder: Path, output: Path, keep: float | None, copy_not_selected: bool) -> None:
+    def start(self, folder: Path, output: Path, keep: float | str | None, copy_not_selected: bool) -> None:
         with self.lock:
             if self.status == "running":
                 raise RuntimeError("KeepSake is already working on a wedding.")
@@ -154,13 +155,15 @@ class Job:
                 self.stages[key]["state"] = "active"
             self.stage, self.eta = key, ""
 
-    def run(self, keep: float | None, copy_not_selected: bool) -> None:
+    def run(self, keep: float | str | None, copy_not_selected: bool) -> None:
         try:
             self.enter("read")
             if self.command(["prepare.py", str(self.folder)], self.on_prepare_line) != 0:
                 raise StepFailed("Reading the photos stopped")
             self.enter("choose")
-            args = ["cull.py", str(self.folder)] + (["--keep", f"{keep * 100:g}"] if keep else [])
+            args = ["cull.py", str(self.folder)] + (["--shortlist"] if keep == "shortlist" else
+                                                    ["--wide", f"{WIDE:g}"] if keep == "wide" else
+                                                    ["--keep", f"{keep * 100:g}"] if keep else [])
             if self.command(args, self.on_cull_line) != 0:
                 raise StepFailed("Choosing stopped")
             self.enter("copy")
@@ -551,7 +554,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"error": "Folder not found. Is the drive connected?"}, 400)
             output = Path(data.get("output") or OUTPUT_ROOT / wedding_name(folder))
             keep = data.get("keep")
-            keep = float(keep) if keep not in (None, "", "studio") else None
+            keep = keep if keep in ("wide", "shortlist") else float(keep) if keep not in (None, "", "studio") else None
             try:
                 JOB.start(folder, output, keep, bool(data.get("copy_not_selected", True)))
             except RuntimeError as e:

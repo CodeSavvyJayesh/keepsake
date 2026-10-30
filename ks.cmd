@@ -63,7 +63,7 @@ exit /b %errorlevel%
 exit /b %errorlevel%
 
 :match
-"%PY%" "%ROOT%scripts\match_selected.py" %2
+"%PY%" "%ROOT%scripts\match_selected.py" %2 %3
 exit /b %errorlevel%
 
 :ingest

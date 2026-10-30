@@ -28,7 +28,7 @@ function show(id) {
 function ready() { document.body.classList.remove('intro'); document.body.classList.add('ready'); }
 
 // ---------- opening: the mandap draws itself, photos are dealt into a ring, the camera drops inside ----------
-const pick = { folder: '', output: '', keep: 'studio' };
+const pick = { folder: '', output: '', keep: 'shortlist' };
 let home = {};
 
 async function boot() {
@@ -105,7 +105,7 @@ $('#outBtn').onclick = async () => {
   const r = await api('/api/choose', { kind: 'output', start: pick.output }).catch(e => toast(e.message));
   if (r?.path) { pick.output = r.path; $('#outPath').textContent = r.path; }
 };
-const KEEP_NOTE = { '0.07': 'about 7 in 100', studio: 'about 1 in 10, like your studio', '0.15': 'about 15 in 100' };
+const KEEP_NOTE = { '0.07': 'about 7 in 100', studio: 'about 1 in 10, like your studio', wide: '1.5x your studio: catches more of your picks', shortlist: 'about 4 in 10, holding 9 in 10 of your moments' };
 $('#keepSeg').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   $('#keepSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));

@@ -36,7 +36,8 @@ from engine.config import CACHE_DIR  # noqa: E402
 from engine.cull import labelled_shoots, model_factory, per_event_scale  # noqa: E402
 from engine.ingest import cache_path, duration  # noqa: E402
 from engine.learn import combine, photo_features  # noqa: E402
-from engine.shots import (CLIP_WEIGHT, centred_clip, clip_ridge, face_details, frame_penalty, group_shots,  # noqa: E402
+from engine.shots import (CLIP_WEIGHT, FAULT_FRAME_W, FAULT_SHOT_W, centred_clip, clip_ridge, face_details,  # noqa: E402
+                          SHORTLIST_FAULT_W, SHORTLIST_TARGET, face_faults, frame_penalty, group_shots, shortlist,
                           one_per_shot, relative_to_shot, train_frame_ranker)
 
 OUTPUT_ROOT = Path("C:/KeepSake Output")
@@ -95,6 +96,12 @@ def add_studio_folders(folder: Path) -> tuple[int, int, int] | None:
     return len(studio), len(rows) - len(studio), len(both)
 
 
+def couple_of(shoot: str) -> str:
+    """'all_raw_images_shevaun_brian_jaisalmer' and 'shevaun_brian_jaisalmer_22_11_2025_..._sangeet' -> 'shevaun_brian'."""
+    name = shoot[len("all_raw_images_"):] if shoot.startswith("all_raw_images_") else shoot
+    return "_".join(name.split("_")[:2])
+
+
 def main() -> int:
     if "--add-studio" in sys.argv:
         i = sys.argv.index("--add-studio")
@@ -117,24 +124,33 @@ def main() -> int:
     start = time.perf_counter()
     make_model, model_name = model_factory()
     print(f"Reading {len(dbs)} weddings...")
-    datasets, details, names, orders = [], [], {}, {}
+    datasets, details, names, orders, faults = [], [], {}, {}, []
+    wide = float(sys.argv[sys.argv.index("--wide") + 1]) if "--wide" in sys.argv else 1.0
+    short = None
+    if "--shortlist" in sys.argv:
+        i = sys.argv.index("--shortlist")
+        nxt = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        short = float(nxt.strip("%")) / 100 if nxt.strip("%").replace(".", "", 1).isdigit() else SHORTLIST_TARGET
     for db in dbs:
         with Catalog(db) as cat:
             ds = photo_features(cat, db.parent.name)
             details.append(face_details(cat, ds.ids))
+            faults.append(face_faults(cat, list(ds.ids)))
             names[db.parent.name] = display_name(cat, db.parent.name)
             orders[db.parent.name] = time_order(cat)
         datasets.append(ds)
         print(f"  {names[db.parent.name]:<34}{len(ds.ids):>7,} photos {int((ds.y == 1).sum()):>6,} studio picks")
     data = combine(datasets, by_wedding=True)
     wedding = np.array(data.group)
+    couple = np.array([couple_of(w) for w in wedding])      # parts of one wedding are never learned from for each other
     ids = np.array(data.ids)
     y = data.y
     known = y >= 0
     shot = group_shots(data.moment, data.clip, list(wedding))
     R = relative_to_shot(np.hstack([data.X, np.vstack(details)]), shot)     # frame choice: + each face's details
     C = centred_clip(data.clip, wedding)                                      # shot choice: + full CLIP content
-    penalty = frame_penalty(data.X, data.names)
+    bad = (np.concatenate(faults) > 0).astype(float)                         # closed eyes / profile faces
+    penalty = frame_penalty(data.X, data.names) + FAULT_FRAME_W * bad
 
     total_files = len(ids) if not list_removed else int(0.12 * len(ids))
     out_root = OUTPUT_ROOT / f"KeepSake blind test {time.strftime('%Y-%m-%d %H.%M')}"
@@ -147,16 +163,19 @@ def main() -> int:
 
     lines = [f"KeepSake blind test - {now_text()}",
              f"Each wedding was decided by a {model_name} model trained only on the other weddings.",
-             "KeepSake keeps this studio's usual share of photos, one photo per shot (best frame).",
+             (f"Shortlist: KeepSake keeps the moments expected to hold {short:.0%} of the studio's picks, one photo per shot (best frame)."
+              if short else
+              f"KeepSake keeps this studio's usual share of photos{f' x {wide:g}' if wide != 1 else ''}, one photo per shot (best frame)."),
              "Shots ranked by the model plus the photo's full content (CLIP); best frame by each face's eyes,",
              "head turn, sharpness and smile compared with the other frames of the burst.", "",
              f"{'Wedding':<30}{'photos':>8}{'KeepSake selected':>19}{'not selected':>14}"
              f"{'studio picks':>14}{'same photo':>12}{'same shot':>11}{'chance':>8}"]
+    faulty = 0
     totals = np.zeros(7)
     for w in sorted(set(wedding), key=lambda k: names[k].lower()):
         t0 = time.perf_counter()
         test = np.flatnonzero(wedding == w)
-        train = (wedding != w) & known
+        train = (couple != couple_of(w)) & known
         model = make_model().fit(data.X[train], y[train])
         score = np.zeros(len(y))
         content = clip_ridge(C[train], y[train])
@@ -165,8 +184,11 @@ def main() -> int:
         ranker = train_frame_ranker(R, y, shot, np.flatnonzero(train))
         frame_score = np.zeros(len(y))
         frame_score[test] = (ranker.predict(R[test]) if ranker is not None else score[test]) - penalty[test]
-        n = int(round(y[train].mean() * len(test)))
-        chosen, kept_in = one_per_shot(test, score, frame_score, shot, n)
+        if short:
+            chosen, kept_in = shortlist(test, score - SHORTLIST_FAULT_W * bad, frame_score, shot, short)
+        else:
+            n = int(round(y[train].mean() * len(test) * wide))
+            chosen, kept_in = one_per_shot(test, score - FAULT_SHOT_W * bad, frame_score, shot, n)
         chosen_set = set(chosen.tolist())
 
         order = orders[w]
@@ -203,22 +225,27 @@ def main() -> int:
         if not list_removed:
             add_studio_folders(folder)
         picks = test[y[test] == 1]
-        pick_shots = {shot[i] for i in picks}
+        chosen_shots = {shot[i] for i in chosen}
         same = int(sum(y[i] == 1 for i in chosen))
-        same_shot = len({shot[i] for i in chosen} & pick_shots)
+        same_shot = int(sum(shot[i] in chosen_shots for i in picks))     # studio picks whose moment is in Selected
         chance = len(chosen) * len(picks) / len(test)
         totals += [len(test), len(chosen), len(test) - len(chosen), len(picks), same, same_shot, chance]
+        faulty += int(bad[chosen].sum())
         lines.append(f"{names[w][:29]:<30}{len(test):>8,}{len(chosen):>19,}{len(test) - len(chosen):>14,}"
                      f"{len(picks):>14,}{same:>12,}{same_shot:>11,}{chance:>8.0f}")
         print(f"  {names[w]:<34} selected {len(chosen):,}, not selected {len(test) - len(chosen):,}; "
               f"{same} same photos as the studio, {same_shot} same shots ({duration(time.perf_counter() - t0)})")
     lines += [f"{'All weddings':<30}{int(totals[0]):>8,}{int(totals[1]):>19,}{int(totals[2]):>14,}"
               f"{int(totals[3]):>14,}{int(totals[4]):>12,}{int(totals[5]):>11,}{totals[6]:>8.0f}", "",
+              f"Studio's picks found: {totals[4] / totals[3]:.0%} of the studio's own photos are in KeepSake's Selected; "
+              f"{totals[5] / totals[3]:.0%} counting a near-identical frame of the same moment.",
+              f"Faces: {faulty / max(totals[1], 1):.1%} of KeepSake's Selected have a main person with closed or half-closed "
+              "eyes or a face turned to the side (rule: avoided whenever the moment has a better frame).",
               f"Same photo: {totals[4] / totals[1]:.0%} of KeepSake's choices were also the studio's "
               f"(pure chance: {totals[6] / totals[1]:.0%}).",
-              f"Same shot: KeepSake chose the same shot as {totals[5] / totals[3]:.0%} of the studio's picks "
-              "(a near-identical frame of it).",
-              "Same photo / same shot count each KeepSake choice once; 'chance' = matches expected by luck.",
+              f"Same shot: for {totals[5] / totals[3]:.0%} of the studio's picks, KeepSake's Selected has that photo or a "
+              "near-identical frame of the same moment.",
+              "'Same photo' counts each KeepSake choice once; 'same shot' counts the studio's picks whose moment KeepSake kept; 'chance' = matches expected by luck.",
               f"Time {duration(time.perf_counter() - start)}"]
     text = "\n".join(lines)
     (out_root / "Summary.txt").write_text(text + "\n", encoding="utf-8")

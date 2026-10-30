@@ -82,6 +82,49 @@ def face_details(cat, ids: list[int]) -> np.ndarray:
     return out
 
 
+# The editor's rule for Selected: no closed or half-closed eyes and no faces turned to profile
+# among the photo's main people. Eyes lowered (looking down) count as closed: they look closed in
+# the photo. A laugh that narrows the eyes is fine. Measured blind on 9 weddings (29 Oct 2026):
+# 6.6% of Selected broke the rule before, 0.1% with these weights, for 0.2 points fewer of the
+# studio's own picks found. A moment whose every frame breaks it gives its place to another one.
+FAULT_SHUT = 0.45            # both eyes at least this shut (MediaPipe blink score, 0 open - 1 shut)
+FAULT_HALF = (0.55, 0.30)    # one eye at least 0.55 shut and the other at least 0.30: half closed
+FAULT_PROFILE = 50           # head turned at least this many degrees
+FAULT_LAUGH = (0.5, 0.45)    # smile and squint at least this: laughing eyes, not a fault
+FAULT_SHOT_W, FAULT_FRAME_W = 1.0, 3.0
+EYES_SHUT, EYES_HALF, PROFILE = 1, 2, 4
+
+
+def face_faults(cat, ids: list[int]) -> np.ndarray:
+    """Per photo (order of `ids`): 0, or EYES_SHUT / EYES_HALF / PROFILE flags for its main people."""
+    pos = {pid: k for k, pid in enumerate(ids)}
+    out = np.zeros(len(ids), np.int8)
+    for pid, bl, br, yaw, smile, squint in cat.db.execute(
+            "SELECT photo_id, blink_l, blink_r, yaw, smile, squint FROM faces WHERE subject = 1 AND read = 1"):
+        k = pos.get(pid)
+        if k is None:
+            continue
+        lo, hi = sorted((bl or 0.0, br or 0.0))
+        laughing = (smile or 0) >= FAULT_LAUGH[0] and (squint or 0) >= FAULT_LAUGH[1]
+        if not laughing and lo >= FAULT_SHUT:
+            out[k] |= EYES_SHUT
+        elif not laughing and hi >= FAULT_HALF[0] and lo >= FAULT_HALF[1]:
+            out[k] |= EYES_HALF
+        if abs(yaw or 0) >= FAULT_PROFILE:
+            out[k] |= PROFILE
+    return out
+
+
+def fault_words(flags: int) -> str:
+    if flags & EYES_SHUT:
+        return "eyes closed (or lowered) on a main person"
+    if flags & EYES_HALF:
+        return "eyes half closed on a main person"
+    if flags & PROFILE:
+        return "a main person's face is turned to the side"
+    return ""
+
+
 def centred_clip(clip: np.ndarray, groups) -> np.ndarray:
     """Unit CLIP vectors minus each wedding's average (removes a wedding's overall look)."""
     v = clip.astype(np.float64)
@@ -135,6 +178,47 @@ def train_frame_ranker(R: np.ndarray, y: np.ndarray, shot: np.ndarray, rows: np.
         return None
     use = np.array(use)
     return Logistic().fit(R[use], y[use])
+
+
+# Shortlist: keep the moments the studio is most likely to pick from, until they hold the target
+# share of the studio's picks (expected), with the best frame of each moment in Selected and its
+# other frames one click away (Swap frame). How many moments that takes is decided per wedding.
+# Measured blind on 10 weddings (30 Oct 2026, each judged by a model that never saw that couple):
+# target 0.94 with the face rule at weight 3 kept 29-48% of the photos (38% on average) and held
+# 89% of the studio's picked moments (every wedding at least 86%) and 57% of their exact photos,
+# with 0.03% of Selected breaking the face rule. SHORTLIST_CAL turns a photo's score (z within its
+# wedding) into the chance that the studio picks it, fitted on those blind scores (about the same
+# on any 9 of the 10 weddings: a 0.70-0.83, b -2.39 to -2.26).
+SHORTLIST_TARGET = 0.94
+SHORTLIST_CAL = (0.81, -2.33)
+SHORTLIST_FAULT_W = 3.0      # a moment whose best frame breaks the face rule counts for much less
+
+
+def shortlist(rows: np.ndarray, score: np.ndarray, frame_score: np.ndarray, shot: np.ndarray,
+              target: float = SHORTLIST_TARGET) -> tuple[np.ndarray, dict[int, int]]:
+    """The best frame of each moment, best moments first, until the moments kept are expected to hold
+    `target` of the studio's picks. Moments are ranked by how many picks they are expected to hold
+    (the sum of their frames' chances), so a long burst of a key moment counts for more than one
+    frame. Returns the same as one_per_shot."""
+    a, b = SHORTLIST_CAL
+    by = defaultdict(list)
+    for i in rows:
+        by[shot[i]].append(i)
+    groups = list(by.values())
+    expected = np.array([float(np.sum(1 / (1 + np.exp(-(a * score[m] + b))))) for m in (np.array(g) for g in groups)])
+    order = np.argsort(-expected, kind="mergesort")
+    need = target * expected.sum()
+    chosen, kept_in, got = [], {}, 0.0
+    for k in order:
+        if got >= need:
+            break
+        members = groups[k]
+        best = max(members, key=lambda i: frame_score[i])
+        chosen.append(best)
+        for i in members:
+            kept_in[i] = best
+        got += expected[k]
+    return np.array(chosen, dtype=int), kept_in
 
 
 def one_per_shot(rows: np.ndarray, score: np.ndarray, frame_score: np.ndarray, shot: np.ndarray,

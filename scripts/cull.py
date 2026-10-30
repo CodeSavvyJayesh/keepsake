@@ -2,6 +2,10 @@ r"""Phase 4: KeepSake's own Selected / Removed for a shoot, with a reason for ev
 
     ks cull "E:\Sharma Wedding\Raw"              like the studio: its usual share, ONE best photo per shot
     ks cull "E:\Sharma Wedding\Raw" --keep 15    the same, but keep 15% of the photos
+    ks cull "E:\Sharma Wedding\Raw" --wide 1.5   a bigger Selected (1.5x the studio's share) that
+                                                 catches more of the studio's own picks
+    ks cull "E:\Sharma Wedding\Raw" --shortlist  Shortlist: about 4 in 10 photos, holding about 9 in 10 of
+                                                 the moments the studio would pick (best frame of each)
     ks cull "E:\Sharma Wedding\Raw" --safe       a big safe shortlist: 95% of what the studio would pick
     ks cull "E:\Sharma Wedding\Raw" --target 90  safe shortlist catching 90% (smaller)
 
@@ -25,6 +29,7 @@ from engine.config import CACHE_DIR  # noqa: E402
 from engine.cull import TARGET, UNSURE_BAND, cull_shoot, labelled_shoots  # noqa: E402
 from engine.ingest import cache_path, duration, shoot_for  # noqa: E402
 from engine.labels import attach_labels  # noqa: E402
+from engine.shots import SHORTLIST_TARGET  # noqa: E402
 
 
 def option(name: str) -> float | None:
@@ -106,7 +111,7 @@ setView('all'); counts();
 
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    for name in ("--target", "--keep"):
+    for name in ("--target", "--keep", "--wide", "--shortlist"):
         if name in sys.argv:
             i = sys.argv.index(name)
             if i + 1 < len(sys.argv) and sys.argv[i + 1] in args:
@@ -121,6 +126,12 @@ def main() -> int:
         return 1
     target = option("--target") or TARGET
     keep = option("--keep")
+    wide = float(sys.argv[sys.argv.index("--wide") + 1]) if "--wide" in sys.argv else 1.0   # e.g. 1.5: a bigger Selected
+    short = None
+    if "--shortlist" in sys.argv:                       # Shortlist: hold this share of the studio's picks
+        i = sys.argv.index("--shortlist")
+        nxt = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        short = float(nxt.strip("%")) / 100 if nxt.strip("%").replace(".", "", 1).isdigit() else SHORTLIST_TARGET
     style = "safe" if ("--safe" in sys.argv or "--target" in sys.argv) else "studio"
     start = time.perf_counter()
     others = labelled_shoots(CACHE_DIR, exclude=shoot.db)
@@ -131,7 +142,8 @@ def main() -> int:
             return 1
         print(f"Learning from {len(others)} other wedding(s) and deciding every photo...")
         try:
-            result = cull_shoot(cat, shoot.name, others, target=target, keep_share=keep, style=style)
+            result = cull_shoot(cat, shoot.name, others, target=target, keep_share=keep, style=style, wide=wide,
+                                shortlist_target=short)
         except RuntimeError as e:
             print(e)
             return 1
@@ -154,7 +166,10 @@ def main() -> int:
     if result.style == "studio":
         how = [f"  Model               {result.model}; chooses like the studio, one photo per shot",
                f"  Shots               {result.shots:,} (near-identical frames grouped)",
-               f"  How many            {result.keep_share:.1%} of photos (this studio's usual share)",
+               (f"  How many            Shortlist: {result.keep_share:.1%} of photos, the moments expected to hold "
+                f"{short:.0%} of the studio's picks" if short else
+                f"  How many            {result.keep_share:.1%} of photos (this studio's usual share"
+                + (f" x {wide:g})" if wide != 1 else ")")),
                "  Best frame          the frame the studio would keep; not closed / half-closed eyes or turned heads"]
     else:
         how = [f"  Model               {result.model}; aim: keep {target:.0%} of what the studio would pick",

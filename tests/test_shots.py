@@ -99,3 +99,38 @@ def test_full_clip_content_learns_what_the_studio_keeps():
     w = clip_ridge(Cc[:400], y[:400])
     s = Cc[400:] @ w
     assert s[y[400:] == 1].mean() > s[y[400:] == 0].mean() + 2 * s.std() / 3
+
+
+def test_faces_that_break_the_editors_rule(tmp_path):
+    from engine.catalog import Catalog
+    from engine.shots import EYES_HALF, EYES_SHUT, PROFILE, face_faults, fault_words
+    with Catalog(tmp_path / "catalog.db") as cat:
+        with cat.db:
+            cat.db.executemany("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status) "
+                               "VALUES (?, ?, '', 'jpeg', 1, 0, 'done')", [(i, f"{i}.jpg") for i in range(1, 8)])
+            faces = [  # photo, blink left, blink right, yaw, smile, squint, subject, read
+                (1, 0.05, 0.08, 5, 0.2, 0.1, 1, 1),      # open: fine
+                (2, 0.62, 0.58, 3, 0.1, 0.1, 1, 1),      # both shut
+                (3, 0.70, 0.40, 0, 0.0, 0.1, 1, 1),      # half closed
+                (4, 0.75, 0.70, 0, 0.8, 0.6, 1, 1),      # laughing: fine
+                (5, 0.05, 0.05, 62, 0.0, 0.0, 1, 1),     # profile
+                (6, 0.90, 0.90, 70, 0.0, 0.0, 0, 1),     # a guest in the background: not counted
+                (7, 0.90, 0.90, 0, 0.0, 0.0, 1, 0)]      # not read: not counted
+            cat.db.executemany("INSERT INTO faces (photo_id, n, blink_l, blink_r, yaw, smile, squint, subject, read) "
+                               "VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)", faces)
+        flags = face_faults(cat, [1, 2, 3, 4, 5, 6, 7])
+    assert list(flags) == [0, EYES_SHUT, EYES_HALF, 0, PROFILE, 0, 0]
+    assert "closed" in fault_words(EYES_SHUT) and "side" in fault_words(PROFILE)
+
+
+def test_shortlist_keeps_the_likeliest_moments_until_the_target():
+    from engine.shots import shortlist
+    shot = np.array([0, 0, 0, 1, 2, 3, 4, 4])                       # moment 0 is a burst of 3 frames
+    score = np.array([2.0, 1.5, 1.0, 2.5, -1.0, -2.0, 0.5, 0.0])
+    frame = np.array([0.1, 0.9, 0.2, 0.0, 0.0, 0.0, 0.3, 0.1])      # the best frame of moment 0 is row 1
+    rows = np.arange(8)
+    chosen, kept_in = shortlist(rows, score, frame, shot, target=0.5)
+    assert set(chosen.tolist()) <= {1, 3}                             # the likeliest moments first
+    assert 1 in chosen.tolist() and kept_in[0] == 1 and kept_in[2] == 1   # the burst is kept by its best frame
+    everything, _ = shortlist(rows, score, frame, shot, target=1.0)
+    assert len(everything) == 5                                       # every moment, one frame each
