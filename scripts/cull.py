@@ -150,7 +150,7 @@ def main() -> int:
         settings = {"when": now_text(), "style": result.style, "target": target, "keep_share": result.keep_share,
                     "unsure_band": UNSURE_BAND, "mode": result.mode, "model": result.model,
                     "trained_on": result.trained_on}
-        cat.save_cull(result.rows, settings)
+        cat.save_cull(result.rows, settings, result.frames)
         page = review_page(shoot, cat)
 
     total = len(result.rows)

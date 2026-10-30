@@ -62,6 +62,7 @@ class CullResult:
     unread: int = 0
     style: str = "safe"
     shots: int = 0                            # studio style: shots in this shoot
+    frames: dict = field(default_factory=dict)  # studio style: {photo id: (shot, KeepSake's frame rank)}
 
 
 def model_factory():
@@ -277,11 +278,26 @@ def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], kee
         rows_out.append((pid, "selected", 1, None, "Could not be read by KeepSake - kept for you to check", None))
     result = CullResult(rows_out, "other weddings", [d.meta["wedding"] for d in train], len(rows),
                         int(data.y[rows].sum()), share, model_name, reasons, unread=len(unread),
-                        style="studio", shots=len(set(shot[mine].tolist())))
+                        style="studio", shots=len(set(shot[mine].tolist())),
+                        frames=frame_ranks(me.ids, shot[mine], frame[mine]))
     y_me = me.y
     if (y_me == 1).any():
         result.caught = (int(((y_me == 1) & keep).sum()), int((y_me == 1).sum()))
     return result
+
+
+def frame_ranks(ids: list[int], shot: np.ndarray, frame: np.ndarray) -> dict[int, tuple[int, int]]:
+    """{photo id: (shot, rank)}: the shot is named by its lowest photo id; rank 1 is the frame
+    KeepSake keeps, 2 its next choice... (the app's Swap frame shows these)."""
+    by = defaultdict(list)
+    for k, s in enumerate(shot):
+        by[int(s)].append(k)
+    out = {}
+    for members in by.values():
+        name = min(int(ids[k]) for k in members)
+        for rank, k in enumerate(sorted(members, key=lambda k: -frame[k]), 1):
+            out[int(ids[k])] = (name, rank)
+    return out
 
 
 def cull_shoot(cat: Catalog, name: str, others: list[Path], target: float = TARGET,

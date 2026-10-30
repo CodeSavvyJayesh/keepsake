@@ -107,6 +107,12 @@ def test_new_wedding_gets_one_photo_per_shot_with_eyes_open(tmp_path):
     same = [row for row in r.rows if row[4] and row[4].startswith("Same shot as")]
     assert same and all(row[5] in chosen for row in same)
     assert any("eyes closed" in row[4] for row in same)
+    # Swap frame needs each photo's shot and KeepSake's order of its frames: 1 = the frame kept
+    assert set(r.frames) == {row[0] for row in r.rows} and len({s for s, _ in r.frames.values()}) == 80
+    assert all(r.frames[pid][1] == 1 for pid in chosen)
+    assert all(r.frames[pid][0] == r.frames[row[5]][0] for row in same for pid in [row[0]])
+    new.save_cull(r.rows, {}, r.frames)
+    assert new.db.execute("SELECT COUNT(*) FROM cull WHERE shot IS NOT NULL AND frame_rank >= 1").fetchone()[0] == 240
 
 
 def make_drive(tmp_path, cat: Catalog):

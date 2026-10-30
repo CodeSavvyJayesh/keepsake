@@ -128,7 +128,9 @@ CREATE TABLE IF NOT EXISTS cull (
     score     REAL,                   -- 0-100, higher = more likely the studio would pick it
     reason    TEXT,                   -- why it was removed (or why it was kept although unsure)
     similar   INTEGER,                -- the kept photo of the same moment, for 'similar' removals
-    changed   INTEGER NOT NULL DEFAULT 0   -- 1 = moved by a person on the review page
+    changed   INTEGER NOT NULL DEFAULT 0,  -- 1 = moved by a person on the review page
+    shot      INTEGER,                -- near-identical frames share this (the shot's first photo id)
+    frame_rank INTEGER                -- KeepSake's order of the shot's frames: 1 = its best frame
 );
 
 -- The studio's own choices, when known (from ks match): 1 = selected, 0 = not selected
@@ -193,12 +195,13 @@ class Catalog:
         """Catalogs made by an older KeepSake get the columns added since (data is kept)."""
         added = {"faces": [("subject", "INTEGER"), ("eyes", "TEXT"), ("lm", "BLOB"), ("emb", "BLOB"),
                            ("person", "INTEGER")],
-                 "cull": [("changed", "INTEGER NOT NULL DEFAULT 0")]}
+                 "cull": [("changed", "INTEGER NOT NULL DEFAULT 0"), ("shot", "INTEGER"), ("frame_rank", "INTEGER")]}
         for table, columns in added.items():
             have = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
             for name, kind in columns:
                 if name not in have:
                     self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+        self.db.execute("CREATE INDEX IF NOT EXISTS cull_shot ON cull (shot)")
         self.db.commit()
 
     def __enter__(self) -> "Catalog":
@@ -398,17 +401,21 @@ class Catalog:
             self.db.executemany("INSERT INTO labels (id, selected, source) VALUES (?, ?, ?)", rows)
         return len(rows)
 
-    def save_cull(self, rows: list[tuple], settings: dict) -> None:
-        """rows: (id, decision, unsure, score, reason, similar). Photos a person moved by hand
-        (in the app's gallery) keep that person's choice: a new cull never overrules them."""
+    def save_cull(self, rows: list[tuple], settings: dict, frames: dict | None = None) -> None:
+        """rows: (id, decision, unsure, score, reason, similar); frames: {id: (shot, frame rank)}.
+        Photos a person moved by hand (in the app's gallery) keep that person's choice and its
+        reason: a new cull never overrules them."""
         import json
         with self.db:
-            by_hand = self.db.execute("SELECT id, decision FROM cull WHERE changed = 1").fetchall()
+            by_hand = self.db.execute("SELECT id, decision, reason FROM cull WHERE changed = 1").fetchall()
             self.db.execute("DELETE FROM cull")
             self.db.executemany("INSERT INTO cull (id, decision, unsure, score, reason, similar) "
                                 "VALUES (?, ?, ?, ?, ?, ?)", rows)
+            if frames:
+                self.db.executemany("UPDATE cull SET shot = ?, frame_rank = ? WHERE id = ?",
+                                    [(int(s), int(r), int(pid)) for pid, (s, r) in frames.items()])
             self.db.executemany("UPDATE cull SET decision = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",
-                                [(decision, "moved by you", pid) for pid, decision in by_hand])
+                                [(decision, reason or "moved by you", pid) for pid, decision, reason in by_hand])
             self.db.execute("INSERT OR REPLACE INTO info (key, value) VALUES ('cull', ?)",
                             (json.dumps(settings),))
 

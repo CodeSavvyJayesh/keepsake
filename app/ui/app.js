@@ -204,8 +204,11 @@ $('#againBtn').onclick = async () => {
 // ---------- gallery and the big view (a person can move any photo across) ----------
 let gList = [], gIdx = 0, gSet = 'selected';
 const other = set => (set === 'selected' ? 'not_selected' : 'selected');
+const setOf = p => (p.sel ?? gSet === 'selected') ? 'selected' : 'not_selected';
 const LABEL = { selected: 'Selected', not_selected: 'Not selected' };
 const ARROW = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+const STACK = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="14" height="14" rx="2"/><path d="M17 21H5a2 2 0 0 1-2-2V7"/></svg>';
+const CHECK = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 
 async function openGallery(set) {
   gSet = set;
@@ -230,7 +233,9 @@ function tile(p) {
   f.dataset.id = p.id; f.title = p.name;
   img.loading = 'lazy'; img.decoding = 'async'; img.onload = () => img.classList.add('in'); img.src = p.u; img.alt = p.name;
   f.appendChild(img);
-  if (p.moved) f.insertAdjacentHTML('beforeend', '<span class="t-badge">Moved by you</span>');
+  if (p.moved) f.insertAdjacentHTML('beforeend', `<span class="t-badge">${p.mine ? 'Your frame' : 'Moved by you'}</span>`);
+  if (p.frames && gSet === 'selected')
+    f.insertAdjacentHTML('beforeend', `<span class="t-frames" title="${p.frames} other frame${p.frames > 1 ? 's' : ''} of this shot: open the photo to choose another">${STACK}+${fmt(p.frames)}</span>`);
   const b = document.createElement('button');
   b.className = 't-move'; b.innerHTML = `Move to ${LABEL[other(gSet)]} ${ARROW}`; b.title = `Move to ${LABEL[other(gSet)]}`;
   b.onclick = e => { e.stopPropagation(); movePhoto(p); };
@@ -244,58 +249,224 @@ function updateResult(r) {
   renderStats();
   $('#gCount').textContent = `${fmt(gList.length)} photos`;
 }
+// keep the open gallery in step with a photo's fresh entry after a move or a swap: it leaves this
+// gallery, comes into it (at its place in time), or is redrawn
+function place(e) {
+  if (!e) return;
+  const grid = $('#gGrid'), here = setOf(e) === gSet, i = gList.findIndex(p => p.id === e.id);
+  const fig = grid.querySelector(`figure[data-id="${e.id}"]`);
+  if (i >= 0) gList.splice(i, 1);
+  if (fig) {
+    if (here) fig.remove();
+    else { fig.classList.add('out'); fig.removeAttribute('data-id'); setTimeout(() => fig.remove(), 350); }
+  }
+  if (!here) return;
+  let k = gList.findIndex(p => p.t > e.t || (p.t === e.t && p.name > e.name));
+  if (k < 0) k = gList.length;
+  gList.splice(k, 0, e);
+  const t = tile(e); t.classList.add('back');
+  const next = gList[k + 1] && grid.querySelector(`figure[data-id="${gList[k + 1].id}"]`);
+  grid.insertBefore(t, next || null);
+}
+const bigOpen = () => !$('#lightbox').hidden;
+function reopen(anchorId, preview) {            // the big view again, on this photo of the gallery
+  if (!bigOpen()) return;
+  if (!gList.length) return closeBig();
+  const i = gList.findIndex(p => p.id === anchorId);
+  showBig(i >= 0 ? i : Math.min(gIdx, gList.length - 1), i >= 0 ? preview : undefined);
+}
 async function movePhoto(p) {
   if (!p || p.busy) return;
-  const from = gSet, to = other(from), at = gList.indexOf(p);
+  const from = setOf(p), to = other(from), at = gList.indexOf(p);
   p.busy = true;
   try {
     const r = await api('/api/move', { id: p.id, to });
-    const i = gList.indexOf(p);
-    if (i >= 0) gList.splice(i, 1);
-    const f = $(`#gGrid figure[data-id="${p.id}"]`);
-    if (f) { f.classList.add('out'); setTimeout(() => f.remove(), 350); }
+    fCache.clear();
+    place(r.photo || { ...p, sel: to === 'selected' });
     updateResult(r.result);
-    if (!$('#lightbox').hidden) { if (gList.length) showBig(Math.min(i, gList.length - 1)); else closeBig(); }
-    toast(`${p.name} moved to ${LABEL[to]}.`, 8000, { label: 'Undo', fn: () => undoMove(p, from, at) });
+    if (bigOpen()) { if (gList.length) showBig(Math.min(at, gList.length - 1)); else closeBig(); }
+    toast(`${p.name} moved to ${LABEL[to]}.`, 8000, { label: 'Undo', fn: () => undoMove(p, from) });
   } catch (e) { toast(e.message, 8000); }
   p.busy = false;
 }
-async function undoMove(p, from, at) {
+async function undoMove(p, from) {
   try {
     const r = await api('/api/move', { id: p.id, to: from });
-    if (gSet === from && !gList.includes(p)) {
-      gList.splice(Math.min(at, gList.length), 0, p);
-      const next = $('#gGrid').children[Math.min(at, gList.length - 1)];
-      const f = tile(p); f.classList.add('back');
-      $('#gGrid').insertBefore(f, next && next.dataset.id !== String(p.id) ? next : null);
-    }
+    fCache.clear();
+    place(r.photo || { ...p, sel: from === 'selected' });
     updateResult(r.result);
+    if (bigOpen()) reopen(strip.anchor && strip.anchor.id, strip.cur && strip.cur.id === p.id ? r.photo : strip.cur && strip.cur.id);
     toast(`${p.name} is back in ${LABEL[from]}.`, 3000);
   } catch (e) { toast(e.message, 8000); }
 }
-function showBig(i) {
+
+// ---------- Swap frame: the other frames of the shot, under the big photo ----------
+// A shot = near-identical frames. KeepSake keeps its best frame; the editor can see the others
+// here (KeepSake's next best is marked 2nd) and put the one the studio likes into Selected instead.
+const fCache = new Map();
+let strip = { anchor: null, list: [], shotN: 0, cur: null }, swapping = false;
+async function loadFrames(id) {
+  if (!fCache.has(id)) fCache.set(id, api(`/api/frames?id=${id}`).catch(() => ({ shot: [], moment: [] })));
+  return fCache.get(id);
+}
+function showBig(i, preview) {               // preview: the frame to show big (an entry or an id; default the photo itself)
   if (!gList.length || i < 0) return;
   gIdx = (i + gList.length) % gList.length;
-  const p = gList[gIdx], lb = $('#lightbox'), img = lb.querySelector('img');
-  img.classList.remove('in', 'drag'); img.style.transform = '';
-  img.onload = () => img.classList.add('in');
-  img.src = `${p.u}/big`;
+  const p = gList[gIdx], lb = $('#lightbox');
   $('#lbCount').textContent = `${fmt(gIdx + 1)} / ${fmt(gList.length)}`;
-  $('#lbName').textContent = p.name;
-  $('#lbReason').textContent = p.reason || ''; $('#lbReason').title = p.reason || '';
-  $('#lbMove').innerHTML = `Move to ${LABEL[other(gSet)]} ${ARROW}<kbd>M</kbd>`;
+  const pid = preview == null ? p.id : (preview.id ?? preview);
+  const kept = strip.list.length > 1 && strip.list.some(f => f.id === p.id);    // same shot: keep the strip while it refreshes
+  const old = strip.list.find(f => f.id === pid);
+  strip = { anchor: p, list: kept ? strip.list : [], shotN: kept ? strip.shotN : 0, cur: p };
   lb.hidden = false;
+  if (!kept) {
+    const expect = (p.frames || 0) > 0;
+    lb.classList.toggle('has-frames', expect); $('#lbFrames').hidden = !expect;
+    $('#lfStrip').innerHTML = ''; $('#lfTitle').textContent = '';
+  }
+  showFrame(typeof preview === 'object' && preview ? preview : pid === p.id ? p : (old || p));
+  loadFrames(p.id).then(r => {
+    if (strip.anchor !== p) return;
+    strip.list = [...r.shot, ...r.moment.map(f => ({ ...f, near: true }))];
+    strip.shotN = r.shot.length;
+    showFrame(strip.list.find(f => f.id === strip.cur.id) || strip.cur);
+    renderStrip();
+  });
   [gIdx + 1, gIdx - 1].forEach(k => { const q = gList[(k + gList.length) % gList.length]; if (q) new Image().src = `${q.u}/big`; });
 }
+function showFrame(f) {                      // the big photo: this frame (not loaded again if it is already there)
+  const img = $('#lightbox img'), url = new URL(`${f.u}/big`, location.href).href;
+  if (img.src !== url || !img.complete) {
+    img.classList.remove('in', 'drag'); img.style.transform = '';
+    img.onload = () => img.classList.add('in');
+    img.src = url;
+  }
+  frameLabels(f);
+}
+function frameLabels(f) {
+  strip.cur = f;
+  $('#lbName').textContent = f.name;
+  $('#lbReason').textContent = f.reason || ''; $('#lbReason').title = f.reason || '';
+  $('#lbMove').innerHTML = `Move to ${LABEL[other(setOf(f))]} ${ARROW}<kbd>M</kbd>`;
+  const k = keptFor(f), use = $('#lbUse');
+  use.hidden = !k;
+  if (k) use.title = `Put ${f.name} into Selected in place of ${k.name} (Enter)`;
+  markCur();
+}
+function keptFor(f) {                        // the frame in Selected that `f` would replace
+  if (!f || setOf(f) === 'selected' || !strip.list.length) return null;
+  const shot = strip.list.slice(0, strip.shotN), at = strip.list.findIndex(x => x.id === f.id);
+  if (at < 0) return null;
+  let best = null;
+  shot.forEach((x, k) => { if (x.sel && (!best || Math.abs(k - at) < Math.abs(best.k - at))) best = { x, k }; });
+  return best && best.x;
+}
+function renderStrip() {
+  const el = $('#lfStrip'), L = strip.list, box = $('#lbFrames'), lb = $('#lightbox');
+  const show = L.length > 1;
+  lb.classList.toggle('has-frames', show);
+  box.hidden = !show;
+  el.innerHTML = '';
+  if (!show) return;
+  const near = L.length - strip.shotN, n = strip.shotN;
+  $('#lfTitle').innerHTML = (n > 1 ? `<b>${fmt(n)}</b> frames of this shot` : 'Only frame of this shot')
+    + (near ? ` &middot; ${fmt(near)} more from this moment` : '');
+  const frag = document.createDocumentFragment();
+  L.forEach((f, k) => {
+    if (k === n && k > 0) frag.appendChild(Object.assign(document.createElement('i'), { className: 'lf-gap' }));
+    const b = document.createElement('button'), img = new Image();
+    b.className = 'lf' + (f.sel ? ' sel' : ''); b.dataset.id = f.id;
+    const second = !f.near && !f.sel && f.rank === 2;
+    b.title = f.name + (f.sel ? ' · in Selected' : '') + (second ? " · KeepSake's next best frame" : '') + (f.near ? ' · same moment' : '');
+    img.decoding = 'async'; img.alt = ''; img.onload = () => img.classList.add('in'); img.src = f.u;
+    b.appendChild(img);
+    if (f.sel) b.insertAdjacentHTML('beforeend', `<span class="lf-in">${CHECK}</span>`);
+    else if (second) b.insertAdjacentHTML('beforeend', '<span class="lf-2">2nd</span>');
+    b.onclick = e => { e.stopPropagation(); previewFrame(f); };
+    frag.appendChild(b);
+  });
+  el.appendChild(frag);
+  markCur(true);
+}
+function markCur(jump) {
+  const el = $('#lfStrip'), id = strip.cur && strip.cur.id;
+  let cur = null;
+  el.querySelectorAll('.lf').forEach(b => { const on = b.dataset.id === String(id); b.classList.toggle('cur', on); if (on) cur = b; });
+  if (cur) el.scrollTo({ left: cur.offsetLeft - el.clientWidth / 2 + cur.offsetWidth / 2, behavior: jump ? 'auto' : 'smooth' });
+}
+function previewFrame(f) {
+  if (!f || (strip.cur && strip.cur.id === f.id)) return;
+  showFrame(f);
+  const k = strip.list.indexOf(f);
+  [k + 1, k - 1].forEach(j => { const q = strip.list[j]; if (q) new Image().src = `${q.u}/big`; });
+}
+function stepFrame(d) {
+  if (strip.list.length < 2) return;
+  const k = strip.list.findIndex(f => f.id === strip.cur.id);
+  previewFrame(strip.list[Math.max(0, Math.min(strip.list.length - 1, k + d))]);
+}
+async function useFrame() {
+  const f = strip.cur, k = keptFor(f);
+  if (!f || !k || swapping) return;
+  swapping = true;
+  try {
+    const r = await api('/api/swap', { id: f.id, replace: k.id });
+    const anchor = afterSwap(r);
+    reopen(anchor, r.selected);
+    toast(`${r.selected.name} is in Selected now; ${r.not_selected.name} went to Not selected.`, 12000,
+      { label: 'Undo', fn: () => undoSwap(r) });
+  } catch (e) { toast(e.message, 8000); }
+  swapping = false;
+}
+function afterSwap(r) {                      // returns the photo the big view stays on
+  fCache.clear();
+  const a = strip.anchor && strip.anchor.id;
+  place(r.selected); place(r.not_selected);
+  updateResult(r.result);
+  if (a === r.not_selected.id && gSet === 'selected') return r.selected.id;     // its place now holds the chosen frame
+  if (a === r.selected.id && gSet === 'not_selected') return r.not_selected.id;
+  return a;
+}
+async function undoSwap(r) {
+  if (swapping) return;
+  swapping = true;
+  try {
+    const u = await api('/api/swap', { id: r.not_selected.id, replace: r.selected.id });
+    reopen(afterSwap(u));
+    toast(`${u.selected.name} is back in Selected.`, 3000);
+  } catch (e) { toast(e.message, 8000); }
+  swapping = false;
+}
+async function moveFrame(f) {                // Move on a frame from the strip (not the gallery's own photo)
+  if (!f || f.busy) return;
+  const to = other(setOf(f)), a = strip.anchor && strip.anchor.id;
+  f.busy = true;
+  try {
+    const r = await api('/api/move', { id: f.id, to });
+    fCache.clear();
+    place(r.photo);
+    updateResult(r.result);
+    reopen(a, r.photo || f.id);
+    toast(`${f.name} moved to ${LABEL[to]}.`, 8000, { label: 'Undo', fn: () => undoMove(r.photo || f, other(to)) });
+  } catch (e) { toast(e.message, 8000); }
+  f.busy = false;
+}
+const moveShown = () => (strip.cur && strip.anchor && strip.cur.id !== strip.anchor.id ? moveFrame(strip.cur) : movePhoto(gList[gIdx]));
+
 const closeBig = () => ($('#lightbox').hidden = true);
 $('#lbPrev').onclick = e => { e.stopPropagation(); showBig(gIdx - 1); };
 $('#lbNext').onclick = e => { e.stopPropagation(); showBig(gIdx + 1); };
 $('#lbClose').onclick = e => { e.stopPropagation(); closeBig(); };
-$('#lbMove').onclick = e => { e.stopPropagation(); movePhoto(gList[gIdx]); };
+$('#lbMove').onclick = e => { e.stopPropagation(); moveShown(); };
+$('#lbUse').onclick = e => { e.stopPropagation(); useFrame(); };
+$('#lfStrip').addEventListener('wheel', e => {      // a mouse wheel scrolls the strip sideways
+  const el = e.currentTarget;
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollWidth > el.clientWidth) { el.scrollLeft += e.deltaY; e.preventDefault(); }
+}, { passive: false });
 (() => {                                   // swipe: drag left = next, right = previous; a plain click outside closes
   const lb = $('#lightbox'), img = lb.querySelector('img');
   let x0 = null, y0 = 0;
-  lb.addEventListener('pointerdown', e => { if (e.target.closest('.lb-btn')) return; x0 = e.clientX; y0 = e.clientY; img.classList.add('drag'); });
+  lb.addEventListener('pointerdown', e => { if (e.target.closest('.lb-btn, .lb-frames')) return; x0 = e.clientX; y0 = e.clientY; img.classList.add('drag'); });
   lb.addEventListener('pointermove', e => { if (x0 === null) return; const m = e.clientX - x0; img.style.transform = `translateX(${m}px) rotate(${m / 80}deg)`; });
   const end = e => {
     if (x0 === null) return;
@@ -306,7 +477,7 @@ $('#lbMove').onclick = e => { e.stopPropagation(); movePhoto(gList[gIdx]); };
   lb.addEventListener('pointerup', end); lb.addEventListener('pointercancel', end);
   let lock = 0;
   lb.addEventListener('wheel', e => {
-    if (Math.abs(e.deltaX) < 30 || Math.abs(e.deltaX) < Math.abs(e.deltaY) || Date.now() < lock) return;
+    if (e.target.closest('.lb-frames') || Math.abs(e.deltaX) < 30 || Math.abs(e.deltaX) < Math.abs(e.deltaY) || Date.now() < lock) return;
     lock = Date.now() + 450; showBig(gIdx + (e.deltaX > 0 ? 1 : -1));
   }, { passive: true });
 })();
@@ -314,11 +485,14 @@ document.querySelectorAll('[data-gallery]').forEach(b => (b.onclick = () => open
 $('#gSeg').onclick = e => { const b = e.target.closest('button'); if (b) openGallery(b.dataset.set); };
 $('#gClose').onclick = () => ($('#gallery').hidden = true);
 addEventListener('keydown', e => {
-  const big = !$('#lightbox').hidden;
+  const big = bigOpen();
   if (e.key === 'Escape') { if (big) closeBig(); else $('#gallery').hidden = true; }
-  if (big && e.key === 'ArrowRight') showBig(gIdx + 1);
-  if (big && e.key === 'ArrowLeft') showBig(gIdx - 1);
-  if (big && (e.key === 'm' || e.key === 'M') && !e.repeat) movePhoto(gList[gIdx]);
+  if (!big) return;
+  if (e.key === 'ArrowRight') showBig(gIdx + 1);
+  if (e.key === 'ArrowLeft') showBig(gIdx - 1);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); stepFrame(e.key === 'ArrowDown' ? 1 : -1); }
+  if (e.key === 'Enter' && !e.repeat) { e.preventDefault(); useFrame(); }
+  if ((e.key === 'm' || e.key === 'M') && !e.repeat) moveShown();
 });
 
 boot();

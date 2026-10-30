@@ -314,13 +314,170 @@ def gallery(shoot: str, which: str) -> list[dict]:
     db = CACHE_DIR / shoot / "catalog.db"
     want = "selected" if which == "selected" else "removed"
     try:
-        rows = read_db(db, "SELECT c.id, p.path, COALESCE(c.reason, ''), c.changed FROM cull c "
-                           "JOIN photos p ON p.id = c.id WHERE c.decision = ? ORDER BY p.taken_s, p.path",
-                       (want,)) if db.exists() else []
+        return entries(db, shoot, "WHERE c.decision = ? ORDER BY p.taken_s, p.path", (want,), frames_of=True) \
+            if db.exists() else []
     except sqlite3.Error:
         return []
-    return [{"id": pid, "u": f"/photo/{shoot}/{pid}", "name": Path(path).name, "reason": reason, "moved": bool(changed)}
-            for pid, path, reason, changed in rows if cache_path(CACHE_DIR / shoot, "thumbs", pid).exists()]
+
+
+def _in(ids) -> str:
+    return "(" + ",".join("?" * len(ids)) + ")"
+
+
+def _chunks(ids: list, n: int = 500):
+    for k in range(0, len(ids), n):
+        yield ids[k:k + n]
+
+
+UPDATED: set[Path] = set()
+
+
+def up_to_date(db: Path) -> None:
+    """A wedding culled by an older KeepSake gets the catalog columns added since (once per run)."""
+    if db not in UPDATED:
+        with Catalog(db):
+            pass
+        UPDATED.add(db)
+
+
+def entries(db: Path, shoot: str, where: str, args=(), frames_of: bool = False) -> list[dict]:
+    """Photos of the wedding for the gallery and the big view: {id, u (thumbnail), name, reason,
+    sel (in Selected), moved (by a person), mine (a frame the person chose), rank (KeepSake's order
+    of the frames of its shot, 1 = its best), t (time taken), frames (other frames of the shot,
+    with frames_of)}."""
+    up_to_date(db)
+    rows = read_db(db, "SELECT c.id, p.path, c.decision, COALESCE(c.reason, ''), c.changed, c.similar, c.shot, "
+                       "c.frame_rank, COALESCE(p.taken_s, 0) FROM cull c JOIN photos p ON p.id = c.id " + where, args)
+    rows = [r for r in rows if cache_path(CACHE_DIR / shoot, "thumbs", r[0]).exists()]
+    reasons = live_reasons(db, [(pid, reason, changed, similar) for pid, _, _, reason, changed, similar, *_ in rows])
+    size = dict(read_db(db, "SELECT shot, COUNT(*) FROM cull WHERE shot IS NOT NULL GROUP BY shot")) if frames_of else {}
+    return [{"id": pid, "u": f"/photo/{shoot}/{pid}", "name": Path(path).name, "reason": reasons[pid],
+             "sel": decision == "selected", "moved": bool(changed), "mine": bool(changed) and reasons[pid].startswith(MINE),
+             "rank": rank, "t": taken, **({"frames": size.get(shot, 1) - 1} if frames_of else {})}
+            for pid, path, decision, _, changed, _, shot, rank, taken in rows]
+
+
+# --- Swap frame: the other frames of a photo's shot, and choosing one of them instead -------------
+
+SHOT_MAX = 240          # frames of one shot shown in the big view (a long scene: the nearest ones)
+MOMENT_MAX = 24         # then up to this many other photos of the same moment, nearest in time
+MINE = "You chose"      # reasons of the frames a person swapped in and out
+RELATIVE = ("softer", "less smiling")      # reason endings that compare with the frame KeepSake kept
+
+
+def _names_kept(reason: str, changed: int) -> bool:
+    if changed:
+        return reason.startswith(MINE + " ") and not reason.startswith(MINE + " this frame")
+    return reason.startswith(("Same shot as ", "Similar photo kept: "))
+
+
+def live_reasons(db: Path, rows: list[tuple]) -> dict[int, str]:
+    """{id: reason} for rows (id, reason, changed, similar). Some reasons name another photo: KeepSake's
+    'Same shot as X, which is kept' and 'Similar photo kept: X (same moment)', and 'You chose X
+    instead' on a frame a person swapped out. When X has since been swapped for another frame,
+    the reason names the frame now in Selected instead."""
+    out = {pid: reason for pid, reason, _, _ in rows}
+    targets = sorted({sim for _, reason, changed, sim in rows if sim is not None and _names_kept(reason, changed)})
+    info = {}
+    for part in _chunks(targets):
+        for pid, path, decision, shot, taken in read_db(
+                db, "SELECT c.id, p.path, c.decision, c.shot, p.taken_s FROM cull c JOIN photos p ON p.id = c.id "
+                    "WHERE c.id IN " + _in(part), part):
+            if decision != "selected":
+                info[pid] = (Path(path).name, shot, taken or 0)
+    if not info:
+        return out
+    shots = sorted({shot for _, shot, _ in info.values() if shot is not None})
+    now_in = collections.defaultdict(list)
+    for part in _chunks(shots):
+        for path, shot, taken in read_db(db, "SELECT p.path, c.shot, p.taken_s FROM cull c JOIN photos p ON p.id = c.id "
+                                             "WHERE c.decision = 'selected' AND c.shot IN " + _in(part), part):
+            now_in[shot].append((Path(path).name, taken or 0))
+    for pid, reason, changed, sim in rows:
+        if sim not in info or not _names_kept(reason, changed):
+            continue
+        name, shot, taken = info[sim]
+        for head, kept_now, gone in (
+                (f"Same shot as {name}, which is kept", "Same shot as {}, which you chose",
+                 f"Same shot as {name}, which you moved to Not selected"),
+                (f"Similar photo kept: {name} (same moment)", "Similar photo kept: {} (same moment)",
+                 f"Similar photo {name} (same moment) - you moved it to Not selected"),
+                (f"{MINE} {name} instead", MINE + " {} instead", f"{MINE} {name} instead, then moved it to Not selected")):
+            if reason.startswith(head):
+                tail = reason[len(head):]
+                tail = "" if any(w in tail for w in RELATIVE) else tail
+                kept = now_in.get(shot)
+                out[pid] = (kept_now.format(min(kept, key=lambda k: abs(k[1] - taken))[0]) if kept else gone) + tail
+                break
+    return out
+
+
+def frames(shoot: str, pid: int) -> dict:
+    """The frames of this photo's shot (near-identical frames, in time order) and then other photos
+    of its moment, for the big view's strip: the person can choose another frame instead."""
+    db = CACHE_DIR / shoot / "catalog.db"
+    out = {"id": pid, "shot": [], "moment": []}
+    if not db.exists():
+        return out
+    try:
+        up_to_date(db)
+        me = read_db(db, "SELECT c.shot, m.moment FROM cull c LEFT JOIN moments m ON m.id = c.id WHERE c.id = ?", (pid,))
+        if not me:
+            return out
+        shot, moment = me[0]
+        order = "ORDER BY p.taken_s, p.path"
+        in_moment = [r[0] for r in read_db(db, "SELECT m.id FROM moments m JOIN photos p ON p.id = m.id "
+                                               "WHERE m.moment = ? " + order, (moment,))] if moment is not None else []
+        in_shot = [r[0] for r in read_db(db, "SELECT c.id FROM cull c JOIN photos p ON p.id = c.id WHERE c.shot = ? "
+                                             + order, (shot,))] if shot is not None else in_moment or [pid]
+        if len(in_shot) > SHOT_MAX:                       # a long scene: the frames around this one
+            at = in_shot.index(pid) if pid in in_shot else 0
+            start = min(max(0, at - SHOT_MAX // 2), len(in_shot) - SHOT_MAX)
+            in_shot = in_shot[start:start + SHOT_MAX]
+        taken = dict(read_db(db, "SELECT id, COALESCE(taken_s, 0) FROM photos WHERE id = ?", (pid,)))
+        rest = [i for i in in_moment if i not in set(in_shot)]
+        if len(rest) > MOMENT_MAX:
+            t = {i: s or 0 for part in _chunks(rest) for i, s in read_db(
+                db, "SELECT id, taken_s FROM photos WHERE id IN " + _in(part), part)}
+            near = set(sorted(rest, key=lambda i: abs(t[i] - taken.get(pid, 0)))[:MOMENT_MAX])
+            rest = [i for i in rest if i in near]
+        found = {}
+        for part in _chunks(in_shot + rest):
+            found.update({e["id"]: e for e in entries(db, shoot, "WHERE c.id IN " + _in(part), part)})
+    except sqlite3.Error:
+        return out
+    out["shot"] = [found[i] for i in in_shot if i in found]
+    out["moment"] = [found[i] for i in rest if i in found]
+    return out
+
+
+def swap_frame(new: int, old: int) -> dict:
+    """Swap frame: `new` (Not selected) goes into Selected in place of `old` (Selected), as one
+    change: both copies move (as with Move) and Undo is the same swap the other way round."""
+    with JOB.lock:
+        shoot = JOB.shoot_name or ""
+    db = CACHE_DIR / shoot / "catalog.db"
+    if new == old or not db.exists():
+        raise MoveError("Choose another frame.")
+    state = dict(read_db(db, "SELECT id, decision FROM cull WHERE id IN (?, ?)", (new, old)))
+    if state.get(new) != "removed":
+        raise MoveError("That frame is already in Selected." if state.get(new) else "That photo is not part of this wedding.")
+    if state.get(old) != "selected":
+        raise MoveError("The photo it replaces is not in Selected any more.")
+    move_photo(new, "selected")
+    try:
+        move_photo(old, "not_selected")
+    except MoveError:
+        move_photo(new, "not_selected")                   # as it was
+        raise
+    names = {i: Path(path).name for i, path in read_db(db, "SELECT id, path FROM photos WHERE id IN (?, ?)", (new, old))}
+    with MOVE_LOCK, Catalog(db) as cat, cat.db:           # the person's choice (an undo puts KeepSake's own back)
+        cat.db.execute("UPDATE cull SET reason = ? WHERE id = ? AND changed = 1",
+                       (f"{MINE} this frame instead of {names[old]}", new))
+        cat.db.execute("UPDATE cull SET reason = ?, similar = ? WHERE id = ? AND changed = 1",
+                       (f"{MINE} {names[new]} instead", new, old))
+    got = {e["id"]: e for e in entries(db, shoot, "WHERE c.id IN (?, ?)", (new, old), frames_of=True)}
+    return {"ok": True, "result": counts(shoot), "selected": got.get(new), "not_selected": got.get(old)}
 
 
 def counts(shoot: str | None) -> dict:
@@ -509,6 +666,13 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/gallery":
             shoot = JOB.shoot_name or ""
             return self.json({"photos": gallery(shoot, q.get("set", ["selected"])[0]) if shoot else []})
+        if url.path == "/api/frames":
+            shoot = JOB.shoot_name or ""
+            try:
+                pid = int(q.get("id", ["-1"])[0])
+            except ValueError:
+                pid = -1
+            return self.json(frames(shoot, pid) if shoot else {"id": pid, "shot": [], "moment": []})
         if url.path == "/api/thumbs":
             shoot = JOB.shoot_name or ""
             which = q.get("set", ["any"])[0]
@@ -569,7 +733,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(JOB.state())
         if path == "/api/move":
             try:
-                return self.json(move_photo(int(data.get("id", -1)), str(data.get("to", ""))))
+                moved = move_photo(int(data.get("id", -1)), str(data.get("to", "")))
+                db = CACHE_DIR / (JOB.shoot_name or "") / "catalog.db"
+                moved["photo"] = next(iter(entries(db, JOB.shoot_name or "", "WHERE c.id = ?", (moved["id"],),
+                                                   frames_of=True)), None)
+                return self.json(moved)
+            except (MoveError, ValueError, TypeError) as e:
+                return self.json({"error": str(e) or "bad request"}, 400)
+        if path == "/api/swap":
+            try:
+                return self.json(swap_frame(int(data.get("id", -1)), int(data.get("replace", -1))))
             except (MoveError, ValueError, TypeError) as e:
                 return self.json({"error": str(e) or "bad request"}, 400)
         if path == "/api/open":

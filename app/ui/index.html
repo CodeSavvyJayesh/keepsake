@@ -202,6 +202,11 @@
   <button class="lb-btn lb-nav next" id="lbNext" aria-label="Next photo" title="Next (→)">
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
   <div class="lb-info"><span class="lb-count" id="lbCount"></span><span class="lb-name" id="lbName"></span><span class="lb-reason" id="lbReason"></span></div>
+  <div class="lb-frames" id="lbFrames" hidden>
+    <div class="lf-head"><span id="lfTitle"></span><span class="lf-keys"><kbd>&uarr;</kbd><kbd>&darr;</kbd> frames &nbsp;<kbd>Enter</kbd> use frame</span></div>
+    <div class="lf-strip" id="lfStrip"></div>
+  </div>
+  <button class="lb-btn lb-use" id="lbUse" hidden>Use this frame <kbd>Enter</kbd></button>
   <button class="lb-btn lb-move" id="lbMove" title="Move this photo to the other folder (M)"></button>
 </div>
 <div class="toast" id="toast" hidden></div>

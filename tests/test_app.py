@@ -156,6 +156,7 @@ def test_a_person_can_move_a_photo_across_and_undo_it(server, tmp_path):
     # Not selected -> Selected: it was only listed, so it is copied from the drive (read only)
     r = call(base, "/api/move", token, {"id": 2, "to": "selected"})
     assert (r["result"]["selected"], r["result"]["not_selected"], r["result"]["moved"]) == (2, 1, 1)
+    assert (r["photo"]["id"], r["photo"]["sel"], r["photo"]["moved"], r["photo"]["t"]) == (2, True, True, 1)
     assert r["result"]["studio_in_selected"] == 1
     assert (out / "Selected" / "Haldi" / "b.jpg").read_bytes() == (root / "Haldi" / "b.jpg").read_bytes()
     sel = call(base, "/api/gallery?set=selected", token)["photos"]
@@ -178,3 +179,97 @@ def test_a_person_can_move_a_photo_across_and_undo_it(server, tmp_path):
     with pytest.raises(urllib.error.HTTPError) as e:
         call(base, "/api/move", token, {"id": 3, "to": "selected"})
     assert e.value.code == 400 and "Plug in the photo drive" in json.loads(e.value.read())["error"]
+
+
+def test_swap_frame_puts_the_editors_frame_in_selected(server, tmp_path):
+    """Big view: the frames of the photo's shot (and its moment) appear beside it, and one click puts
+    another frame into Selected in place of KeepSake's; Undo is the same swap back."""
+    app, base, token = server
+    from engine import deliver
+    from engine.catalog import Catalog
+    from engine.ingest import cache_path
+    root = tmp_path / "drive" / "Mehta Wedding"
+    (root / "Haldi").mkdir(parents=True)
+    names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"]
+    for n in names:
+        (root / "Haldi" / n).write_bytes(n.encode() * 1000)
+    shoot, db = "mehta", app.CACHE_DIR / "mehta" / "catalog.db"
+    out = tmp_path / "out" / "Mehta Wedding"
+    kept = "Same shot as a.jpg, which is kept"
+    with Catalog(db) as cat:
+        with cat.db:
+            cat.db.executemany("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status, taken_s) "
+                               "VALUES (?, ?, 'Haldi', 'jpeg', 3000, 0, 'done', ?)",
+                               [(i + 1, f"Haldi/{n}", i) for i, n in enumerate(names)])
+            cat.db.executemany("INSERT INTO moments (id, moment, size, pos) VALUES (?, 1, 4, ?)", [(i, i - 1) for i in range(1, 5)])
+        cat.save_cull([(1, "selected", 0, 90, "", None),
+                       (2, "removed", 0, 80, kept, 1),
+                       (3, "removed", 0, 70, kept + " - eyes closed (or lowered) on a main person in this one", 1),
+                       (4, "removed", 0, 60, "Similar photo kept: a.jpg (same moment) - this one is softer", 1),
+                       (5, "selected", 0, 95, "", None)],
+                      {}, {1: (1, 1), 2: (1, 2), 3: (1, 3), 4: (4, 1), 5: (5, 1)})
+        deliver.apply(root, out, deliver.jobs_from(cat, "list"), progress=lambda _line: None)
+    for pid in range(1, 6):
+        thumb = cache_path(app.CACHE_DIR / shoot, "thumbs", pid)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumb.write_bytes(b"\xff\xd8")
+    app.JOB.status, app.JOB.shoot_name, app.JOB.folder, app.JOB.output = "done", shoot, root, out
+
+    sel = call(base, "/api/gallery?set=selected", token)["photos"]
+    assert [(p["name"], p["frames"]) for p in sel] == [("a.jpg", 2), ("e.jpg", 0)]
+    old = app.CACHE_DIR / "old" / "catalog.db"           # a wedding culled by an older KeepSake (no shot columns yet)
+    with Catalog(old) as cat, cat.db:
+        cat.db.execute("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status) VALUES (1, 'x.jpg', '', 'jpeg', 1, 0, 'done')")
+        cat.db.execute("INSERT INTO cull (id, decision, unsure) VALUES (1, 'selected', 0)")
+        cat.db.execute("DROP INDEX cull_shot")
+        cat.db.execute("ALTER TABLE cull DROP COLUMN shot")
+        cat.db.execute("ALTER TABLE cull DROP COLUMN frame_rank")
+    thumb = cache_path(app.CACHE_DIR / "old", "thumbs", 1)
+    thumb.parent.mkdir(parents=True)
+    thumb.write_bytes(b"\xff\xd8")
+    assert [p["name"] for p in app.gallery("old", "selected")] == ["x.jpg"] and app.frames("old", 1)["shot"][0]["id"] == 1
+    f = call(base, "/api/frames?id=1", token)
+    assert [(p["id"], p["sel"], p["rank"]) for p in f["shot"]] == [(1, True, 1), (2, False, 2), (3, False, 3)]
+    assert [p["id"] for p in f["moment"]] == [4]
+    assert call(base, "/api/frames?id=3", token)["shot"] == f["shot"]           # the same strip from any frame
+
+    # the editor prefers b.jpg: it goes into Selected (copied from the drive), a.jpg moves out
+    r = call(base, "/api/swap", token, {"id": 2, "replace": 1})
+    assert (r["result"]["selected"], r["result"]["not_selected"], r["result"]["moved"]) == (2, 3, 2)
+    assert r["selected"]["id"] == 2 and r["selected"]["mine"] and r["selected"]["reason"] == "You chose this frame instead of a.jpg"
+    assert r["not_selected"]["id"] == 1 and r["not_selected"]["reason"] == "You chose b.jpg instead"
+    assert (out / "Selected" / "Haldi" / "b.jpg").read_bytes() == (root / "Haldi" / "b.jpg").read_bytes()
+    assert (out / "Not selected" / "Haldi" / "a.jpg").exists() and not (out / "Selected" / "Haldi" / "a.jpg").exists()
+    f = {p["id"]: p for p in call(base, "/api/frames?id=2", token)["shot"] + call(base, "/api/frames?id=2", token)["moment"]}
+    assert f[3]["reason"] == "Same shot as b.jpg, which you chose - eyes closed (or lowered) on a main person in this one"
+    assert f[4]["reason"] == "Similar photo kept: b.jpg (same moment)"         # 'softer' compared with a.jpg: dropped
+    assert [p["name"] for p in call(base, "/api/gallery?set=selected", token)["photos"]] == ["b.jpg", "e.jpg"]
+
+    # changes her mind again: c.jpg instead of b.jpg; b.jpg goes back to KeepSake's own verdict
+    call(base, "/api/swap", token, {"id": 3, "replace": 2})
+    f = {p["id"]: p for p in call(base, "/api/frames?id=1", token)["shot"]}
+    assert [i for i in f if f[i]["sel"]] == [3] and not f[2]["moved"]
+    assert f[2]["reason"] == "Same shot as c.jpg, which you chose" and f[1]["reason"] == "You chose c.jpg instead"
+    # Undo twice: every photo is back exactly as KeepSake had it
+    call(base, "/api/swap", token, {"id": 2, "replace": 3})
+    r = call(base, "/api/swap", token, {"id": 1, "replace": 2})
+    assert (r["result"]["selected"], r["result"]["moved"]) == (2, 0) and r["selected"]["reason"] == ""
+    with Catalog(db) as cat:
+        assert dict(cat.db.execute("SELECT id, reason FROM cull WHERE id IN (2, 3)"))[2] == kept
+    assert (out / "Selected" / "Haldi" / "a.jpg").exists() and (out / "Not selected" / "Haldi" / "b.jpg").exists()
+    rows = deliver.read_manifest(out)
+    assert rows["Haldi/a.jpg"]["copy"] == "Selected/Haldi/a.jpg"
+
+    # refused cleanly: a frame already in Selected, a replaced photo not in Selected, the drive away
+    for body, words in (({"id": 5, "replace": 1}, "already in Selected"), ({"id": 2, "replace": 3}, "not in Selected"),
+                        ({"id": 1, "replace": 1}, "another frame")):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            call(base, "/api/swap", token, body)
+        assert e.value.code == 400 and words in json.loads(e.value.read())["error"]
+    root.rename(tmp_path / "drive" / "away")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(base, "/api/swap", token, {"id": 4, "replace": 1})
+    assert "Plug in the photo drive" in json.loads(e.value.read())["error"]
+    assert call(base, "/api/state", token)["result"]["selected"] == 2
+    with Catalog(db) as cat:
+        assert dict(cat.db.execute("SELECT id, decision FROM cull WHERE id IN (1, 4)")) == {1: "selected", 4: "removed"}
