@@ -156,6 +156,10 @@
       <h2 id="wkName"></h2>
     </div>
     <div class="foot">
+      <div class="ready" id="readyRow" hidden>
+        <span id="readyText"></span>
+        <button class="btn gold sm" data-gallery="selected" id="viewNow">View photos now</button>
+      </div>
       <div class="pct"><span id="pct">0</span><span class="pc">%</span></div>
       <div class="track"><i id="ovBar"></i></div>
       <ol class="steps" id="steps"></ol>
@@ -188,6 +192,7 @@
 <div class="gallery" id="gallery" hidden>
   <div class="g-head">
     <h3 id="gTitle">Selected</h3><span class="g-count" id="gCount"></span>
+    <span class="g-note" id="gNote">Still copying · you can move photos when it finishes</span>
     <div class="seg" id="gSeg"><button data-set="selected" class="on">Selected</button><button data-set="not_selected">Not selected</button></div>
     <button class="link close" id="gClose">Close</button>
   </div>

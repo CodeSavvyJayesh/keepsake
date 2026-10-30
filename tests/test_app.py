@@ -260,6 +260,14 @@ def test_swap_frame_puts_the_editors_frame_in_selected(server, tmp_path):
     rows = deliver.read_manifest(out)
     assert rows["Haldi/a.jpg"]["copy"] == "Selected/Haldi/a.jpg"
 
+    # while the photos are still copying, the choice can be viewed but not changed yet
+    app.JOB.status, app.JOB.result["ready"], app.JOB.eta = "running", True, "4 min"
+    assert call(base, "/api/gallery?set=selected", token)["photos"]
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(base, "/api/swap", token, {"id": 2, "replace": 1})
+    assert "as soon as copying finishes (about 4 min left)" in json.loads(e.value.read())["error"]
+    app.JOB.status = "done"
+
     # refused cleanly: a frame already in Selected, a replaced photo not in Selected, the drive away
     for body, words in (({"id": 5, "replace": 1}, "already in Selected"), ({"id": 2, "replace": 3}, "not in Selected"),
                         ({"id": 1, "replace": 1}, "another frame")):

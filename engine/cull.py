@@ -36,7 +36,7 @@ from pathlib import Path
 import numpy as np
 
 from .catalog import Catalog
-from .learn import GBM, Dataset, Logistic, combine, lightgbm_available, photo_features
+from .learn import GBM, Dataset, Logistic, combine, lightgbm_available, past_wedding, photo_features
 from .shots import (CLIP_WEIGHT, FACE_DETAILS, FAULT_FRAME_W, FAULT_SHOT_W, SHORTLIST_FAULT_W, centred_clip, clip_ridge,
                     face_details, face_faults, shortlist,
                     fault_words, frame_penalty, group_shots,
@@ -316,9 +316,7 @@ def cull_shoot(cat: Catalog, name: str, others: list[Path], target: float = TARG
         raise RuntimeError("This shoot has no CLIP embeddings yet. Run first:  ks prepare (or ks clip, ks groups)")
     train = []
     for db in others:
-        with Catalog(db) as other:
-            ds = photo_features(other, db.parent.name)
-            ds.meta["faces"] = face_details(other, ds.ids)
+        ds = past_wedding(db, face_details)          # saved from an earlier run when unchanged
         if ds.clip is not None and (ds.y == 1).any():
             train.append(ds)
     if train and style == "studio":

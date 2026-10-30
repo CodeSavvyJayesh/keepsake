@@ -26,6 +26,7 @@ import numpy as np  # noqa: E402
 from engine.bursts import group_bursts  # noqa: E402
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
+from engine.config import measured_workers  # noqa: E402
 from engine.faces import FACES_VERSION, FaceReader, eye_state, faces_task, square_crop  # noqa: E402
 from engine.ingest import Progress, Runner, cache_path, duration, shoot_for  # noqa: E402
 from engine.labels import attach_labels  # noqa: E402
@@ -178,7 +179,7 @@ def main() -> int:
             cat.db.commit()
         todo = cat.faces_pending(FACES_VERSION, eyes)
         # each worker uses one CPU thread, so all hardware threads but two are used
-        workers = args.workers or max(1, (os.cpu_count() or 2) - 2)
+        workers = args.workers or measured_workers("faces") or max(1, (os.cpu_count() or 2) - 2)
         if todo:
             print(f"Reading faces in {len(todo):,} photos with {workers} workers...")
             tasks = [(pid, str(cache_path(shoot.cache, "analysis", pid))) for pid in todo]

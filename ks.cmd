@@ -39,6 +39,7 @@ if /i "%CMD%"=="judge" goto judge
 if /i "%CMD%"=="app" goto app
 if /i "%CMD%"=="models" goto models
 if /i "%CMD%"=="test" goto test
+if /i "%CMD%"=="speedtest" goto speedtest
 echo Unknown command: %CMD%
 goto help
 
@@ -68,6 +69,10 @@ exit /b %errorlevel%
 
 :ingest
 "%PY%" "%ROOT%scripts\ingest.py" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
+:speedtest
+"%PY%" "%ROOT%scripts\speedtest.py"
 exit /b %errorlevel%
 
 :quality
@@ -149,6 +154,7 @@ echo   ks edge               create the photo folders and edge-case files
 echo   ks match "folder"     match a wedding's selected photos to the originals
 echo   ks ingest "folder"    read a whole shoot once: catalog, previews, thumbnails
 echo   ks ingest "folder" --bench   speed test: best number of workers for this drive
+echo   ks speedtest          find the fastest settings for this laptop (5 min, changes no results)
 echo   ks quality "folder"   measure sharpness and exposure of an ingested shoot
 echo   ks faces "folder"     find faces; read eyes, smiles and head pose
 echo   ks eyecheck "folder"  make the 50-face eye check page (Phase 2 exit test)

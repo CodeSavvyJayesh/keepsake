@@ -141,6 +141,13 @@ function render(st) {
   $('#eta').textContent = st.eta ? `about ${st.eta} left` : 'working';
   $('#elapsed').textContent = st.elapsed_text || '0 s';
   scene.setProgress(st.progress);
+  const ready = st.status === 'running' && !!(st.result && st.result.ready);
+  document.body.classList.toggle('copying', ready);
+  $('#readyRow').hidden = !ready;
+  if (ready) {
+    result = st.result;
+    $('#readyText').innerHTML = `<b>${fmt(st.result.selected)}</b> photos chosen · copying them now`;
+  }
 }
 async function poll(st) {
   try {
@@ -175,6 +182,7 @@ function countUp(el, to, ms = 1800) {
 }
 let result = {};
 function finish(st) {
+  document.body.classList.remove('copying');
   const r = result = st.result || {};
   show('done');
   api('/api/thumbs?set=selected&n=60').then(x => scene.sort(x.photos)).catch(() => {});

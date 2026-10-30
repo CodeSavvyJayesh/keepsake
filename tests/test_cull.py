@@ -115,6 +115,33 @@ def test_new_wedding_gets_one_photo_per_shot_with_eyes_open(tmp_path):
     assert new.db.execute("SELECT COUNT(*) FROM cull WHERE shot IS NOT NULL AND frame_rank >= 1").fetchone()[0] == 240
 
 
+def test_past_weddings_are_read_once_and_kept(tmp_path):
+    """The features of a past wedding are saved next to its catalog: the next cull loads exactly
+    the same numbers in a moment, and a changed catalog is read again."""
+    from engine.learn import FEATURES_FILE, past_wedding, photo_features
+    from engine.shots import face_details
+    (tmp_path / "past").mkdir()
+    db = tmp_path / "past" / "catalog.db"
+    fake_wedding(db).close()
+    calls = []
+    details = lambda cat, ids: calls.append(1) or face_details(cat, ids)      # noqa: E731
+    first = past_wedding(db, details)
+    assert (tmp_path / "past" / FEATURES_FILE).exists() and len(calls) == 1
+    again = past_wedding(db, details)
+    assert len(calls) == 1                                        # loaded, not computed
+    for a, b in ((first.X, again.X), (first.y, again.y), (first.moment, again.moment), (first.clip, again.clip),
+                 (first.meta["faces"], again.meta["faces"])):
+        assert a.dtype == b.dtype and np.array_equal(a, b)
+    assert (first.ids, first.names, first.group, again.meta["wedding"]) == (again.ids, again.names, again.group, "past")
+    with Catalog(db) as cat:
+        fresh = photo_features(cat, "past")
+        assert np.array_equal(fresh.X, again.X)
+        cat.db.execute("UPDATE labels SET selected = 1 - selected WHERE id = 1")
+        cat.db.commit()
+    changed = past_wedding(db, details)
+    assert len(calls) == 2 and changed.y[0] != first.y[0]       # the catalog changed: read again
+
+
 def make_drive(tmp_path, cat: Catalog):
     root = tmp_path / "drive" / "Raw"
     for (path,) in cat.db.execute("SELECT path FROM photos"):

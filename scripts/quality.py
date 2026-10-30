@@ -20,7 +20,7 @@ import numpy as np  # noqa: E402
 
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import worker_count  # noqa: E402
+from engine.config import measured_workers, worker_count  # noqa: E402
 from engine.ingest import Progress, Runner, cache_path, duration, shoot_for  # noqa: E402
 from engine.labels import attach_labels  # noqa: E402
 from engine.quality import QUALITY_VERSION, auc, measure_task, relative_scores  # noqa: E402
@@ -81,7 +81,7 @@ def main() -> int:
             cat.db.execute("DELETE FROM quality")
             cat.db.commit()
         todo = cat.quality_pending(QUALITY_VERSION)
-        workers = args.workers or worker_count()
+        workers = args.workers or measured_workers("quality") or worker_count()
         if todo:
             print(f"Measuring {len(todo):,} photos with {workers} workers...")
             tasks = [(pid, str(cache_path(shoot.cache, "analysis", pid))) for pid, _ in todo]

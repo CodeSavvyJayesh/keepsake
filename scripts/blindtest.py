@@ -35,7 +35,7 @@ from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.config import CACHE_DIR  # noqa: E402
 from engine.cull import labelled_shoots, model_factory, per_event_scale  # noqa: E402
 from engine.ingest import cache_path, duration  # noqa: E402
-from engine.learn import combine, photo_features  # noqa: E402
+from engine.learn import combine, past_wedding  # noqa: E402
 from engine.shots import (CLIP_WEIGHT, FAULT_FRAME_W, FAULT_SHOT_W, centred_clip, clip_ridge, face_details,  # noqa: E402
                           SHORTLIST_FAULT_W, SHORTLIST_TARGET, face_faults, frame_penalty, group_shots, shortlist,
                           one_per_shot, relative_to_shot, train_frame_ranker)
@@ -132,9 +132,9 @@ def main() -> int:
         nxt = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
         short = float(nxt.strip("%")) / 100 if nxt.strip("%").replace(".", "", 1).isdigit() else SHORTLIST_TARGET
     for db in dbs:
+        ds = past_wedding(db, face_details)            # saved from an earlier run when unchanged
+        details.append(ds.meta["faces"])
         with Catalog(db) as cat:
-            ds = photo_features(cat, db.parent.name)
-            details.append(face_details(cat, ds.ids))
             faults.append(face_faults(cat, list(ds.ids)))
             names[db.parent.name] = display_name(cat, db.parent.name)
             orders[db.parent.name] = time_order(cat)

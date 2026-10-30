@@ -16,8 +16,10 @@ caught in the top 20/30/50% of photos, and how big the shortlist must be to catc
 from __future__ import annotations
 
 import math
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -69,8 +71,7 @@ def photo_features(cat: Catalog, wedding: str) -> Dataset:
     for r in rows:
         if r[3] is not None:
             times[r[2]].append(r[3])
-    for t in times.values():
-        t.sort()
+    times = {body: np.array(sorted(t)) for body, t in times.items()}   # sorted arrays: fast lookups
 
     names, data = None, []
     for r in rows:
@@ -142,6 +143,68 @@ def photo_features(cat: Catalog, wedding: str) -> Dataset:
             if pid in index:
                 ds.clip[i] = clip_vecs[index[pid]]
         ds = add_clip_moment_features(ds)
+    return ds
+
+
+# --- Features of past weddings, kept on this laptop between runs -----------------------------
+
+FEATURES_FILE = "features.npz"
+
+
+def _code_version() -> str:
+    """Changes whenever the code that computes features changes (then everything is recomputed)."""
+    import hashlib
+    here = Path(__file__).resolve().parent
+    h = hashlib.sha1()
+    for name in ("learn.py", "shots.py"):
+        h.update((here / name).read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _catalog_stamp(db: Path) -> str:
+    """Size and time of the catalog (and its write-ahead log): any change to it changes this."""
+    parts = []
+    for p in (db, db.with_name(db.name + "-wal")):
+        try:
+            st = p.stat()
+            parts.append(f"{st.st_size}:{st.st_mtime_ns}")
+        except OSError:
+            parts.append("-")
+    return "|".join(parts)
+
+
+def past_wedding(db: Path, details) -> Dataset:
+    """photo_features (+ meta['faces'] = details(cat, ids)) of a past wedding, from the copy saved
+    next to its catalog when the catalog has not changed since; computed and saved otherwise.
+    The saved copy holds exactly the same numbers, so the choices do not change, only the time."""
+    name = db.parent.name
+    key = f"{_code_version()}|{name}|{_catalog_stamp(db)}"
+    cache = db.parent / FEATURES_FILE
+    try:
+        with np.load(cache, allow_pickle=False) as z:
+            if str(z["key"]) == key:
+                ds = Dataset([int(i) for i in z["ids"]], [str(n) for n in z["names"]], z["X"], z["y"],
+                             [str(g) for g in z["group"]], z["moment"],
+                             z["clip"].astype(np.float32) if z["clip"].size else None, meta={"wedding": name})
+                ds.meta["faces"] = z["faces"]
+                return ds
+    except (OSError, KeyError, ValueError):
+        pass
+    with Catalog(db) as cat:
+        ds = photo_features(cat, name)
+        ds.meta["faces"] = details(cat, ds.ids)
+    key = f"{_code_version()}|{name}|{_catalog_stamp(db)}"     # after reading (opening may touch the log)
+    tmp = cache.with_name("features.tmp.npz")
+    try:
+        np.savez(tmp, key=np.array(key), ids=np.array(ds.ids, np.int64), names=np.array(ds.names), X=ds.X, y=ds.y,
+                 group=np.array(ds.group), moment=ds.moment, faces=ds.meta["faces"],
+                 clip=ds.clip.astype(np.float16) if ds.clip is not None else np.zeros(0, np.float16))
+        os.replace(tmp, cache)
+    except OSError:                       # no space or read-only: just not saved
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
     return ds
 
 

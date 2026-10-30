@@ -295,3 +295,13 @@ h1 em, h2 em { font-style: italic; color: var(--gold-hi); }
   .intro-mark { top: 10vh; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition-duration: .2s !important; } }
+
+/* The choice is ready before the copying ends: view it straight away */
+.ready { display: flex; align-items: center; justify-content: center; gap: 18px; margin-bottom: 18px; color: var(--ink);
+  font: 300 15px var(--display); animation: fade .6s var(--ease); }
+.ready[hidden] { display: none; }
+.ready b { font-weight: 500; color: var(--gold-hi); }
+.btn.sm { padding: 10px 22px; font-size: 13px; }
+.g-note { display: none; font-size: 12.5px; color: var(--gold-hi); }
+body.copying .g-note { display: inline; }
+body.copying .t-move, body.copying .lb-move, body.copying .lb-use { display: none !important; }

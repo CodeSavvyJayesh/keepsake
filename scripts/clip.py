@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
 from engine.clip import BATCH, CLIP_VERSION, clip_task  # noqa: E402
-from engine.config import worker_count  # noqa: E402
+from engine.config import measured_workers, worker_count  # noqa: E402
 from engine.ingest import Progress, Runner, cache_path, duration, shoot_for  # noqa: E402
 
 
@@ -35,7 +35,7 @@ def main() -> int:
     start = time.perf_counter()
     with Catalog(shoot.db) as cat:
         todo = cat.clip_pending(CLIP_VERSION)
-        workers = args.workers or max(1, (worker_count() + 1) // 2)
+        workers = args.workers or measured_workers("clip") or max(1, (worker_count() + 1) // 2)
         failed = 0
         if todo:
             print(f"CLIP for {len(todo):,} photos with {workers} workers...")

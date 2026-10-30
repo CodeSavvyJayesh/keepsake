@@ -166,6 +166,9 @@ class Job:
                                                     ["--keep", f"{keep * 100:g}"] if keep else [])
             if self.command(args, self.on_cull_line) != 0:
                 raise StepFailed("Choosing stopped")
+            with self.lock:                     # the choice is made: its photos can be viewed while they copy
+                self.result.update(counts(self.shoot_name))
+                self.result["ready"] = True
             self.enter("copy")
             args = ["apply.py", str(self.folder), str(self.output)]
             if not copy_not_selected:
@@ -515,6 +518,9 @@ def move_photo(pid: int, to: str) -> dict:
     if to not in ("selected", "not_selected"):
         raise MoveError("Choose Selected or Not selected.")
     with JOB.lock:
+        if JOB.status == "running" and JOB.result.get("ready"):
+            raise MoveError("You can move photos as soon as copying finishes"
+                            + (f" (about {JOB.eta} left)." if JOB.eta else "."))
         if JOB.status != "done" or not JOB.shoot_name:
             raise MoveError("Finish culling this wedding first.")
         shoot, root, out = JOB.shoot_name, Path(JOB.folder), Path(JOB.output)

@@ -72,6 +72,19 @@ def exiftool_path() -> str:
     raise FileNotFoundError("ExifTool not found. Run setup.ps1 again.")
 
 
+SPEED_FILE = DATA_DIR / "speed.json"            # ks speedtest: the best worker counts for this laptop
+
+
+def measured_workers(step: str) -> int | None:
+    """The worker count `ks speedtest` found fastest for this step on this laptop, if measured."""
+    try:
+        import json
+        n = json.loads(SPEED_FILE.read_text(encoding="utf-8")).get(step)
+    except (OSError, ValueError, AttributeError):
+        return None
+    return n if isinstance(n, int) and n > 0 else None
+
+
 def worker_count() -> int:
     """Physical CPU cores minus one, so the laptop stays responsive while the engine runs.
 
