@@ -1,3 +1,4 @@
+import csv
 """Tests for one photo per shot and the all-weddings blind test. Run: ks test"""
 import sys
 from pathlib import Path
@@ -66,6 +67,52 @@ def test_blind_test_on_all_weddings(tmp_path, monkeypatch):
     assert len(list(studio.iterdir())) == int(studio.name.split("(")[1].rstrip(")"))
     both = next(one.glob("Selected by both (*)"))
     assert {p.name for p in both.iterdir()} == {p.name for p in studio.iterdir()} & {p.name for p in sel.iterdir()}
+
+
+def test_blind_test_of_the_shortlist_in_two_tiers(tmp_path, monkeypatch):
+    import blindtest as script
+    from test_cull import fake_wedding
+    cache = tmp_path / "cache"
+    for name in ("wedding_one", "wedding_two", "wedding_three"):
+        (cache / name).mkdir(parents=True)
+        fake_wedding(cache / name / "catalog.db", n=60).close()
+    monkeypatch.setattr(script, "CACHE_DIR", cache)
+    monkeypatch.setattr(script, "OUTPUT_ROOT", tmp_path / "out")
+    monkeypatch.setattr(sys, "argv", ["blindtest.py", "--shortlist", "--numbers"])
+    assert script.main() == 0
+    run = next((tmp_path / "out").iterdir())
+    text = (run / "Summary.txt").read_text()
+    assert "Selected + Maybe" in text and "near-identical frame" in text
+    assert not list((run / "wedding_one").glob("KeepSake selected (*)"))            # numbers only: no copies
+    rows = list(csv.DictReader(open(run / "wedding_one" / "KeepSake choices.csv", encoding="utf-8")))
+    kinds = {r["keepsake"] for r in rows}
+    assert kinds <= {"selected", "maybe", "not selected"} and "selected" in kinds and len(rows) == 60
+
+
+def test_selected_in_two_tiers_best_first_then_maybe_and_never_too_many():
+    from engine.shots import shortlist, tiers
+    rng = np.random.default_rng(3)
+    n = 300
+    shot = np.repeat(np.arange(150), 2)                       # 150 shots of 2 frames
+    score = rng.normal(size=n)
+    frame = rng.normal(size=n)
+    rows = np.arange(n)
+    best, chosen, kept_in = tiers(rows, score, score, frame, shot, best_n=30, target=0.99, max_share=0.4,
+                                  best_by="studio")
+    assert len(best) == 30 and list(chosen[:30]) == list(best)                     # Best first
+    assert len(chosen) == int(0.4 * n)                                               # capped at 40% of the photos
+    assert len({shot[i] for i in chosen}) == len(chosen)                             # one per shot
+    assert all(frame[i] >= frame[j] for i in chosen for j in rows if shot[j] == shot[i])   # each shot's best frame
+    top = sorted(set(shot), key=lambda k: -score[shot == k].max())[:30]             # Best = the 30 best shots
+    assert {shot[i] for i in best} == set(top)
+    small, _, _ = tiers(rows, score, score, frame, shot, best_n=30, target=0.2, best_by="studio")
+    assert len(small) == 30                                                          # Best is kept whatever the target
+    # the default: Selected = the Shortlist's first moments (most picks expected), then Maybe
+    best, chosen, _ = tiers(rows, score, score, frame, shot, best_n=30, target=0.99, max_share=0.4)
+    plain, _ = shortlist(rows, score, frame, shot, 0.99)
+    assert list(best) == list(plain[:30]) and list(chosen) == list(plain[:120])
+    small, _, _ = tiers(rows, score, score, frame, shot, best_n=30, target=0.05)
+    assert len(small) == 30
 
 
 def test_each_main_face_is_measured_for_the_frame_choice(tmp_path):

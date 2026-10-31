@@ -1,6 +1,7 @@
 // KeepSake 3D scene, written directly in WebGL (no libraries: works offline on any laptop).
 //
-//   1. deal   - wedding photos are dealt, one by one, into a tiny tilted ring (cards land and flip)
+//   1. deal   - wedding photos scatter up from the bottom of the screen, tumbling, and land face up
+//               in a tiny tilted ring
 //   2. drop   - the camera drops inside the ring, which opens around the viewer
 //   3. carousel - a slow 3D carousel of prints with soft reflections; drag to spin it
 //   working: the carousel turns faster, each photo lights up in gold as it passes the front
@@ -14,7 +15,8 @@ const FLOOR = -H / 2 - 0.06;        // where the reflections start
 // ring placement (in front of the camera): dealt far away, small and tilted; open around the viewer
 const DEALT = { p: [0, -0.95, -16], tilt: 0.5, s: 0.4 };
 const OPEN = { p: [0, -0.32, -3.6], tilt: 0.06, s: 1.0 };
-const DEAL_S = 0.15 + (N - 1) * 0.075 + 0.7;   // seconds until the last print lands
+const DEAL_STAGGER = 0.07, DEAL_FLY = 1.5;      // one print leaves every 70 ms; each flies for 1.5 s
+const DEAL_S = 0.15 + (N - 1) * DEAL_STAGGER + DEAL_FLY;   // seconds until the last print lands
 const DROP_S = 2.8;                             // seconds for the camera to drop inside
 
 // ---------- matrices (column-major, like WebGL) ----------
@@ -47,6 +49,11 @@ const easeInOut = k => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 
 const easeOutBack = k => 1 + 2.2 * Math.pow(k - 1, 3) + 1.2 * Math.pow(k - 1, 2);
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 const rand = (seed => () => (seed = (seed * 16807) % 2147483647) / 2147483647)(1020);
+// a point in front of the camera, in the coordinates of the dealt ring (the inverse of its placement)
+function toRing(w) {
+  const d = [w[0] - DEALT.p[0], w[1] - DEALT.p[1], w[2] - DEALT.p[2]], c = Math.cos(DEALT.tilt), s = Math.sin(DEALT.tilt);
+  return [d[0] / DEALT.s, (c * d[1] + s * d[2]) / DEALT.s, (-s * d[1] + c * d[2]) / DEALT.s];
+}
 
 // ---------- shaders ----------
 const CARD_VS = `
@@ -142,6 +149,17 @@ export class Scene {
     this.dust = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.dust); gl.bufferData(gl.ARRAY_BUFFER, seeds, gl.STATIC_DRAW);
     this.blank = Array.from({ length: 5 }, (_, i) => this.texture(blankPrint(i)));
     this.cards = Array.from({ length: N }, (_, i) => ({ i, tex: this.blank[i % 5], url: null, glow: 0, lift: 0, deal: 0, sel: 0 }));
+    // the scatter: each print starts below the bottom edge of the screen, at its own place, and they
+    // leave in a shuffled order, tumbling (1 or 3 half turns) and shrinking into the far ring
+    const order = this.cards.map(c => c.i).sort(() => rand() - 0.5);
+    order.forEach((i, k) => {
+      const c = this.cards[i], x = (rand() * 2 - 1) * 5.6;
+      c.launch = 0.15 + k * DEAL_STAGGER;
+      c.from = toRing([x, -5.5 - rand() * 0.6, -9.5 - rand() * 2]);
+      c.pan = clamp(x / 5.6, -1, 1);
+      c.turns = rand() < 0.65 ? 1 : 3; c.roll = (rand() - 0.5) * 2.4; c.big = 3.0 + rand() * 0.7;
+    });
+    this.onEvent = null;
     this.queue = []; this.pool = [];
     addEventListener('resize', () => this.resize()); this.resize();
     addEventListener('pointermove', e => { this.mouse = [e.clientX / innerWidth * 2 - 1, e.clientY / innerHeight * 2 - 1]; });
@@ -175,7 +193,8 @@ export class Scene {
   // scene-time waits: the opening keeps its rhythm even on a slow laptop
   wait(sec) { return this.ok ? new Promise(r => this.timers.push({ at: this.t + sec, r })) : Promise.resolve(); }
   start() { if (this.ok && this.started === null) this.started = this.t; return this.ok ? this.wait(DEAL_S - (this.t - this.started)) : Promise.resolve(); }   // deal; resolves when dealt
-  open() { if (this.ok && this.dropT === null) this.dropT = this.t; }           // the camera drops inside
+  open() { if (this.ok && this.dropT === null) { this.dropT = this.t; this.emit('drop'); } }   // the camera drops inside
+  emit(kind, card) { if (this.onEvent) try { this.onEvent(kind, card); } catch (e) { /* sound is optional */ } }
   setMode(mode) {
     if (!this.ok) return;
     this.mode = mode;
@@ -231,11 +250,16 @@ export class Scene {
     for (const c of this.cards) {
       const a = c.i / N * Math.PI * 2 + this.spin;
       const front = Math.cos(wrap(a));                       // 1 = right in front of the viewer
-      // dealing: each print flies in from the near edge of the ring and flips face up as it lands
-      const dk = since < 0 ? 0 : clamp((since - 0.15 - c.i * 0.075) / 0.7, 0, 1);
+      // dealing: each print scatters up from the bottom of the screen and lands face up in the ring
+      const dk = since < 0 ? 0 : clamp((since - c.launch) / DEAL_FLY, 0, 1);
       c.deal = dk;
       if (dk <= 0) continue;
-      const e = easeOutBack(dk);
+      if (!c.launched) { c.launched = true; this.emit('launch', c); }
+      if (dk >= 1 && !c.landed) {
+        c.landed = true; this.emit('land', c);
+        if (this.cards.every(x => x.landed)) this.emit('dealt');
+      }
+      const m = Math.sin(dk * Math.PI / 2), e = m + Math.sin(dk * Math.PI) * 0.06;   // rises, slows, settles
       // a new photo enters while out of sight (behind the viewer)
       if (front < -0.6 && !c.swapped) {
         if (this.selected && this.selected.length) { this.load(c, this.selected[this.selIndex++ % this.selected.length]); c.swapped = true; }
@@ -243,15 +267,14 @@ export class Scene {
       }
       if (front > 0.2) c.swapped = false;
       const rx = R * Math.sin(a), rz = -R * Math.cos(a);
-      const deckX = 0, deckY = 2.6, deckZ = R * 1.6;            // the deal starts above the near edge
-      const px = lerp(deckX, rx, e), py = lerp(deckY, 0, e) + Math.sin(dk * Math.PI) * 0.9, pz = lerp(deckZ, rz, e);
-      const flip = (1 - e) * Math.PI;
+      const px = lerp(c.from[0], rx, m), py = lerp(c.from[1], 0, e), pz = lerp(c.from[2], rz, m);
+      const flip = (1 - m) * Math.PI * c.turns, roll = (1 - m) * c.roll, grow = lerp(c.big, 1, m);
       // light: the print passing the front glows while working; all glow when done
       const target = this.mode === 'working' ? Math.pow(Math.max(0, front), 18) * 1.2 :
         this.mode === 'done' ? 0.28 + 0.4 * Math.pow(Math.max(0, front), 6) : 0.04 + 0.1 * Math.pow(Math.max(0, front), 8);
       c.glow += (target - c.glow) * (1 - Math.exp(-dt * 6));
       c.lift += ((this.mode === 'working' ? Math.pow(Math.max(0, front), 18) * 0.18 : 0) - c.lift) * (1 - Math.exp(-dt * 6));
-      const local = mul(T(px, py + c.lift, pz), mul(RY(-a + flip), RZ((1 - e) * 0.5)));
+      const local = mul(T(px, py + c.lift, pz), mul(RY(-a + flip), mul(RZ(roll), S(grow, grow, grow))));
       const M = mul(ringM, local);
       const z = view[2] * M[12] + view[6] * M[13] + view[10] * M[14] + view[14];
       const reflM = mul(ringM, mul(T(px, 2 * FLOOR - py - c.lift, pz), mul(RY(-a + flip), S(1, -1, 1))));
@@ -269,7 +292,7 @@ export class Scene {
       gl.uniform2f(C.u.uUvScale, asp > fa ? fa / asp : 1, asp > fa ? 1 : asp / fa);
       gl.uniformMatrix4fv(C.u.uModel, false, reflect ? it.reflM : it.M);
       const depth = clamp((it.z + 22) / 18, 0.35, 1);
-      gl.uniform1f(C.u.uOpacity, Math.min(1, it.dk * 1.6));
+      gl.uniform1f(C.u.uOpacity, Math.min(1, it.dk * 8));          // already whole as it rises into view
       gl.uniform1f(C.u.uBright, (0.55 + 0.45 * depth) * (0.75 + 0.25 * Math.max(0, it.front)));
       gl.uniform1f(C.u.uGlow, reflect ? 0 : c.glow);
       gl.uniform1f(C.u.uReflect, reflect ? 1 : 0);

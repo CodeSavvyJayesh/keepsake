@@ -2,6 +2,8 @@ r"""The blind test on every past wedding: KeepSake chooses like the studio, with
 
     ks blindtest                 every prepared wedding with the studio's choices (needs 2 or more)
     ks blindtest --list-removed  copy only the Selected photos; Not selected are listed in a file
+    ks blindtest --shortlist     Shortlist, as the app makes it: Selected (the best) + Maybe
+    ks blindtest --shortlist --numbers   the same, numbers only (no copies: a few minutes)
     ks blindtest --add-studio "C:\KeepSake Output\KeepSake blind test 2026-10-19 19.36"
                                  add the studio's folders to an earlier run (no new decisions)
 
@@ -37,7 +39,7 @@ from engine.cull import labelled_shoots, model_factory, per_event_scale  # noqa:
 from engine.ingest import cache_path, duration  # noqa: E402
 from engine.learn import combine, past_wedding  # noqa: E402
 from engine.shots import (CLIP_WEIGHT, FAULT_FRAME_W, FAULT_SHOT_W, centred_clip, clip_ridge, face_details,  # noqa: E402
-                          SHORTLIST_FAULT_W, SHORTLIST_TARGET, face_faults, frame_penalty, group_shots, shortlist,
+                          BEST_BY, SHORTLIST_FAULT_W, SHORTLIST_MAX, SHORTLIST_TARGET, face_faults, frame_penalty, group_shots, shortlist, tiers,
                           one_per_shot, relative_to_shot, train_frame_ranker)
 
 OUTPUT_ROOT = Path("C:/KeepSake Output")
@@ -117,6 +119,7 @@ def main() -> int:
         print(f"Done: {run}")
         return 0
     list_removed = "--list-removed" in sys.argv
+    numbers_only = "--numbers" in sys.argv
     dbs = labelled_shoots(CACHE_DIR)
     if len(dbs) < 2:
         print("Needs at least 2 prepared weddings with the studio's choices (ks prepare).")
@@ -156,7 +159,7 @@ def main() -> int:
     out_root = OUTPUT_ROOT / f"KeepSake blind test {time.strftime('%Y-%m-%d %H.%M')}"
     out_root.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(out_root).free / 1e6
-    if free < total_files * PREVIEW_MB + 2000:
+    if not numbers_only and free < total_files * PREVIEW_MB + 2000:
         print(f"Not enough free space for all copies (about {total_files * PREVIEW_MB / 1000:.0f} GB); "
               "copying only Selected and listing Not selected.")
         list_removed = True
@@ -168,8 +171,14 @@ def main() -> int:
               f"KeepSake keeps this studio's usual share of photos{f' x {wide:g}' if wide != 1 else ''}, one photo per shot (best frame)."),
              "Shots ranked by the model plus the photo's full content (CLIP); best frame by each face's eyes,",
              "head turn, sharpness and smile compared with the other frames of the burst.", "",
-             f"{'Wedding':<30}{'photos':>8}{'KeepSake selected':>19}{'not selected':>14}"
-             f"{'studio picks':>14}{'same photo':>12}{'same shot':>11}{'chance':>8}"]
+             *([f"Selected: the best, this studio's usual share; Maybe: the rest of the Shortlist (at most "
+                f"{SHORTLIST_MAX:.0%} of the photos in all). Studio picks found as the same photo, and counting a",
+                "near-identical frame of the same shot (+frame).", "",
+                f"{'Wedding':<30}{'photos':>8}{'Selected':>10}{'Maybe':>8}{'Not sel.':>10}{'studio':>8}"
+                f"{'in Selected':>13}{'+frame':>8}{'in Sel.+Maybe':>15}{'+frame':>8}"] if short else
+              [f"{'Wedding':<30}{'photos':>8}{'KeepSake selected':>19}{'not selected':>14}"
+               f"{'studio picks':>14}{'same photo':>12}{'same shot':>11}{'chance':>8}"])]
+    tier_totals = np.zeros(11)
     faulty = 0
     totals = np.zeros(7)
     for w in sorted(set(wedding), key=lambda k: names[k].lower()):
@@ -184,8 +193,15 @@ def main() -> int:
         ranker = train_frame_ranker(R, y, shot, np.flatnonzero(train))
         frame_score = np.zeros(len(y))
         frame_score[test] = (ranker.predict(R[test]) if ranker is not None else score[test]) - penalty[test]
+        best_set = set()
         if short:
-            chosen, kept_in = shortlist(test, score - SHORTLIST_FAULT_W * bad, frame_score, shot, short)
+            n_best = max(1, int(round(y[train].mean() * len(test))))
+            best, chosen, kept_in = tiers(test, score - FAULT_SHOT_W * bad, score - SHORTLIST_FAULT_W * bad,
+                                          frame_score, shot, n_best, short)
+            best_set = set(best.tolist())
+            other_way = "studio" if BEST_BY == "shortlist" else "shortlist"     # the other way to rank Selected
+            alt, _, _ = tiers(test, score - FAULT_SHOT_W * bad, score - SHORTLIST_FAULT_W * bad, frame_score,
+                              shot, n_best, short, best_by=other_way)
         else:
             n = int(round(y[train].mean() * len(test) * wide))
             chosen, kept_in = one_per_shot(test, score - FAULT_SHOT_W * bad, frame_score, shot, n)
@@ -193,11 +209,17 @@ def main() -> int:
 
         order = orders[w]
         folder = out_root / names[w]
-        sel_dir = folder / f"KeepSake selected ({len(chosen):,})"
+        n_sel = len(best_set) if short else len(chosen)
+        sel_dir = folder / f"KeepSake selected ({n_sel:,})"
+        maybe_dir = folder / f"KeepSake maybe ({len(chosen) - n_sel:,})"
         rem_dir = folder / f"KeepSake not selected ({len(test) - len(chosen):,})"
-        sel_dir.mkdir(parents=True, exist_ok=True)
-        if not list_removed:
-            rem_dir.mkdir(parents=True, exist_ok=True)
+        if not numbers_only:
+            sel_dir.mkdir(parents=True, exist_ok=True)
+            if short:
+                maybe_dir.mkdir(parents=True, exist_ok=True)
+            if not list_removed:
+                rem_dir.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(parents=True, exist_ok=True)
         cache = dbs[[d.parent.name for d in dbs].index(w)].parent
         with open(folder / "KeepSake choices.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
@@ -206,8 +228,10 @@ def main() -> int:
                 pid = int(ids[i])
                 k, base = order.get(pid, (0, f"{pid}.jpg"))
                 name = f"{k:05d}_{Path(base).stem}.jpg"
-                if i in chosen_set:
+                if i in chosen_set and (not short or i in best_set):
                     target, decision, reason = sel_dir / name, "selected", "best frame of a chosen shot"
+                elif i in chosen_set:
+                    target, decision, reason = maybe_dir / name, "maybe", "best frame of a Shortlist shot"
                 else:
                     best = kept_in.get(i)
                     if best is not None:
@@ -217,12 +241,12 @@ def main() -> int:
                         reason = "shot not among the best"
                     target, decision = rem_dir / name, "not selected"
                 writer.writerow([name, decision, reason, int(y[i] == 1)])
-                if decision == "selected" or not list_removed:
+                if not numbers_only and (decision != "not selected" or not list_removed):
                     src = cache_path(cache, "analysis", pid)
                     if src.exists():
                         shutil.copyfile(src, target)
 
-        if not list_removed:
+        if not list_removed and not numbers_only:
             add_studio_folders(folder)
         picks = test[y[test] == 1]
         chosen_shots = {shot[i] for i in chosen}
@@ -231,10 +255,41 @@ def main() -> int:
         chance = len(chosen) * len(picks) / len(test)
         totals += [len(test), len(chosen), len(test) - len(chosen), len(picks), same, same_shot, chance]
         faulty += int(bad[chosen].sum())
-        lines.append(f"{names[w][:29]:<30}{len(test):>8,}{len(chosen):>19,}{len(test) - len(chosen):>14,}"
-                     f"{len(picks):>14,}{same:>12,}{same_shot:>11,}{chance:>8.0f}")
+        if short:
+            best_shots = {shot[i] for i in best_set}
+            alt_shots, alt_set = {shot[i] for i in alt}, set(alt.tolist())
+            row = [len(test), len(best_set), len(chosen) - len(best_set), len(test) - len(chosen), len(picks),
+                   sum(i in best_set for i in picks), sum(shot[i] in best_shots for i in picks), same, same_shot,
+                   sum(shot[i] in alt_shots for i in picks), sum(i in alt_set for i in picks)]
+            tier_totals += row
+            lines.append(f"{names[w][:29]:<30}{row[0]:>8,}{row[1]:>10,}{row[2]:>8,}{row[3]:>10,}{row[4]:>8,}"
+                         f"{row[5]:>8,} {row[5] / max(row[4], 1):>3.0%}{row[6] / max(row[4], 1):>8.0%}"
+                         f"{row[7]:>10,} {row[7] / max(row[4], 1):>3.0%}{row[8] / max(row[4], 1):>8.0%}")
+        else:
+            lines.append(f"{names[w][:29]:<30}{len(test):>8,}{len(chosen):>19,}{len(test) - len(chosen):>14,}"
+                         f"{len(picks):>14,}{same:>12,}{same_shot:>11,}{chance:>8.0f}")
         print(f"  {names[w]:<34} selected {len(chosen):,}, not selected {len(test) - len(chosen):,}; "
               f"{same} same photos as the studio, {same_shot} same shots ({duration(time.perf_counter() - t0)})")
+    if short:
+        t = tier_totals
+        lines += [f"{'All weddings':<30}{int(t[0]):>8,}{int(t[1]):>10,}{int(t[2]):>8,}{int(t[3]):>10,}{int(t[4]):>8,}"
+                  f"{int(t[5]):>8,} {t[5] / t[4]:>3.0%}{t[6] / t[4]:>8.0%}{int(t[7]):>10,} {t[7] / t[4]:>3.0%}"
+                  f"{t[8] / t[4]:>8.0%}", "",
+                  f"Selected ({t[1] / t[0]:.0%} of the photos) holds {t[5] / t[4]:.0%} of the studio's picks as the same photo, "
+                  f"{t[6] / t[4]:.0%} counting a near-identical frame.",
+                  f"Selected + Maybe ({(t[1] + t[2]) / t[0]:.0%} of the photos) holds {t[7] / t[4]:.0%} as the same photo, "
+                  f"{t[8] / t[4]:.0%} counting a near-identical frame.",
+                  f"Selected is the {'Shortlist' if BEST_BY == 'shortlist' else 'Studio style'} order's first "
+                  f"moments. Ranked the other way ({'like Studio style' if BEST_BY == 'shortlist' else 'the Shortlist order'}) "
+                  f"it would hold {t[10] / t[4]:.0%} as the same photo, {t[9] / t[4]:.0%} counting a near-identical frame.",
+                  f"Faces: {faulty / max(t[1] + t[2], 1):.1%} of Selected + Maybe have a main person with closed or "
+                  "half-closed eyes or a face turned to the side.",
+                  f"Time {duration(time.perf_counter() - start)}"]
+        text = "\n".join(lines)
+        (out_root / "Summary.txt").write_text(text + "\n", encoding="utf-8")
+        print("\n" + text)
+        print(f"\nFolders: {out_root}")
+        return 0
     lines += [f"{'All weddings':<30}{int(totals[0]):>8,}{int(totals[1]):>19,}{int(totals[2]):>14,}"
               f"{int(totals[3]):>14,}{int(totals[4]):>12,}{int(totals[5]):>11,}{totals[6]:>8.0f}", "",
               f"Studio's picks found: {totals[4] / totals[3]:.0%} of the studio's own photos are in KeepSake's Selected; "

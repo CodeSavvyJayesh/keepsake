@@ -281,3 +281,73 @@ def test_swap_frame_puts_the_editors_frame_in_selected(server, tmp_path):
     assert call(base, "/api/state", token)["result"]["selected"] == 2
     with Catalog(db) as cat:
         assert dict(cat.db.execute("SELECT id, decision FROM cull WHERE id IN (1, 4)")) == {1: "selected", 4: "removed"}
+
+
+def test_selected_maybe_and_not_selected(server, tmp_path):
+    """Shortlist in three folders: the gallery shows each, a photo moves between any two (Undo puts
+    KeepSake's own choice back), Swap frame keeps the folder, and the studio's picks are counted
+    in Selected, with Maybe, and counting a near-identical frame."""
+    app, base, token = server
+    from engine import deliver
+    from engine.catalog import Catalog
+    from engine.ingest import cache_path
+    root = tmp_path / "drive" / "Shah Wedding"
+    (root / "Haldi").mkdir(parents=True)
+    names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"]
+    for n in names:
+        (root / "Haldi" / n).write_bytes(n.encode() * 1000)
+    shoot, db = "shah", app.CACHE_DIR / "shah" / "catalog.db"
+    out = tmp_path / "out" / "Shah Wedding"
+    with Catalog(db) as cat:
+        with cat.db:
+            cat.db.executemany("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status, taken_s) "
+                               "VALUES (?, ?, 'Haldi', 'jpeg', 3000, 0, 'done', ?)",
+                               [(i + 1, f"Haldi/{n}", i) for i, n in enumerate(names)])
+            cat.db.executemany("INSERT INTO labels (id, selected, source) VALUES (?, ?, 'test')",
+                               [(1, 1), (2, 0), (3, 1), (4, 1), (5, 0)])
+        cat.save_cull([(1, "selected", 0, 90, "", None), (2, "selected", 0, 70, "", None),
+                       (3, "removed", 0, 60, "Same shot as b.jpg, which is kept", 2),
+                       (4, "removed", 0, 20, "Rated low", None), (5, "removed", 0, 10, "Rated low", None)],
+                      {}, {1: (1, 1), 2: (2, 1), 3: (2, 2), 4: (4, 1), 5: (5, 1)}, best={1})
+        deliver.apply(root, out, deliver.jobs_from(cat, "list"), progress=lambda _line: None)
+    for pid in range(1, 6):
+        thumb = cache_path(app.CACHE_DIR / shoot, "thumbs", pid)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumb.write_bytes(b"\\xff\\xd8")
+    app.JOB.status, app.JOB.shoot_name, app.JOB.folder, app.JOB.output = "done", shoot, root, out
+    assert (out / "Selected" / "Haldi" / "a.jpg").exists() and (out / "Maybe" / "Haldi" / "b.jpg").exists()
+
+    g = {s: [p["name"] for p in call(base, f"/api/gallery?set={s}", token)["photos"]]
+         for s in ("selected", "maybe", "not_selected")}
+    assert g == {"selected": ["a.jpg"], "maybe": ["b.jpg"], "not_selected": ["c.jpg", "d.jpg", "e.jpg"]}
+    c = app.counts(shoot)
+    assert (c["selected"], c["maybe"], c["not_selected"]) == (1, 1, 3)
+    assert (c["studio_picks"], c["studio_in_selected"], c["studio_in_kept"], c["studio_near"]) == (3, 1, 1, 2)
+
+    # Maybe -> Selected -> Not selected, then back to Maybe: KeepSake's own choice again
+    r = call(base, "/api/move", token, {"id": 2, "to": "selected"})
+    assert r["photo"]["tier"] == "selected" and (r["result"]["selected"], r["result"]["maybe"]) == (2, 0)
+    assert (out / "Selected" / "Haldi" / "b.jpg").exists() and not (out / "Maybe" / "Haldi" / "b.jpg").exists()
+    call(base, "/api/move", token, {"id": 2, "to": "not_selected"})
+    assert (out / "Not selected" / "Haldi" / "b.jpg").exists()
+    r = call(base, "/api/move", token, {"id": 2, "to": "maybe"})
+    assert r["photo"]["tier"] == "maybe" and not r["photo"]["moved"] and r["result"]["moved"] == 0
+    assert (out / "Maybe" / "Haldi" / "b.jpg").exists()
+    # a Not selected photo straight into Maybe (copied from the drive)
+    r = call(base, "/api/move", token, {"id": 4, "to": "maybe"})
+    assert r["photo"]["tier"] == "maybe" and (out / "Maybe" / "Haldi" / "d.jpg").read_bytes() == b"d.jpg" * 1000
+    call(base, "/api/move", token, {"id": 4, "to": "not_selected"})
+
+    # Swap frame in Maybe: the chosen frame goes to Maybe, not to Selected
+    r = call(base, "/api/swap", token, {"id": 3, "replace": 2})
+    assert r["selected"]["tier"] == "maybe" and r["not_selected"]["tier"] == "not_selected"
+    assert (out / "Maybe" / "Haldi" / "c.jpg").exists() and (out / "Not selected" / "Haldi" / "b.jpg").exists()
+    assert app.counts(shoot)["studio_in_kept"] == 2                  # c.jpg was a studio pick
+    r = call(base, "/api/swap", token, {"id": 2, "replace": 3})       # Undo
+    assert r["selected"]["id"] == 2 and r["selected"]["tier"] == "maybe" and r["result"]["moved"] == 0
+
+    # a new cull keeps a person's choice of folder
+    call(base, "/api/move", token, {"id": 5, "to": "maybe"})
+    with Catalog(db) as cat:
+        cat.save_cull([(i, "removed", 0, 1, "", None) for i in range(1, 6)], {}, best=set())
+        assert cat.db.execute("SELECT decision, best FROM cull WHERE id = 5").fetchone() == ("selected", 0)

@@ -23,7 +23,7 @@ from pathlib import Path
 from .catalog import Catalog
 from .config import DATA_DIR
 
-SELECTED, NOT_SELECTED = "Selected", "Not selected"     # the two output folders
+SELECTED, MAYBE, NOT_SELECTED = "Selected", "Maybe", "Not selected"     # the output folders
 MANIFEST = "KeepSake manifest.csv"
 README = "KeepSake read me.txt"
 PART = ".keepsake-part"
@@ -86,14 +86,21 @@ def check_output(root: Path, out: Path) -> None:
         raise OutputError(f"{out} already has other files in it. Choose a new, empty folder.")
 
 
+def folder_for(decision: str, best) -> str:
+    """Selected (the best), Maybe (the rest of a Shortlist) or Not selected."""
+    if decision != "selected":
+        return NOT_SELECTED
+    return SELECTED if best else MAYBE
+
+
 def jobs_from(cat: Catalog, removed: str = "copy") -> list[tuple[Job, str | None]]:
     """(job, companion file) per photo, from the saved cull."""
     out = []
-    for pid, path, companion, decision, unsure, reason in cat.db.execute(
-            "SELECT p.id, p.path, p.companion, c.decision, c.unsure, COALESCE(c.reason, '') "
+    for pid, path, companion, decision, best, unsure, reason in cat.db.execute(
+            "SELECT p.id, p.path, p.companion, c.decision, c.best, c.unsure, COALESCE(c.reason, '') "
             "FROM cull c JOIN photos p ON p.id = c.id ORDER BY p.path"):
-        folder = SELECTED if decision == "selected" else NOT_SELECTED
-        copy = folder == SELECTED or removed == "copy"
+        folder = folder_for(decision, best)
+        copy = folder != NOT_SELECTED or removed == "copy"
         out.append((Job(pid, folder, unsure, reason, path, copy), companion))
     return out
 
@@ -248,7 +255,7 @@ def undo(out: Path) -> UndoReport:
             report.removed += 1
         else:
             report.kept_changed.append(row["copy"])
-    for folder in (SELECTED, NOT_SELECTED, "Removed"):         # "Removed": outputs made before 20 Oct
+    for folder in (SELECTED, MAYBE, NOT_SELECTED, "Removed"):  # "Removed": outputs made before 20 Oct
         base = out / folder
         if base.is_dir():
             for d in sorted((p for p in base.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):

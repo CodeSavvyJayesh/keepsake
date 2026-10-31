@@ -115,6 +115,33 @@ def test_new_wedding_gets_one_photo_per_shot_with_eyes_open(tmp_path):
     assert new.db.execute("SELECT COUNT(*) FROM cull WHERE shot IS NOT NULL AND frame_rank >= 1").fetchone()[0] == 240
 
 
+def test_shortlist_in_two_tiers_goes_to_three_folders(tmp_path):
+    """Shortlist: Selected holds the best (about the studio's usual share), Maybe the rest of the
+    shortlist; ks apply copies them into two folders and Not selected is listed."""
+    for name in ("past_one", "past_two"):
+        (tmp_path / name).mkdir()
+        fake_wedding(tmp_path / name / "catalog.db").close()
+    (tmp_path / "new").mkdir()
+    new = fake_wedding(tmp_path / "new" / "catalog.db", labelled=False)
+    others = labelled_shoots(tmp_path, exclude=tmp_path / "new" / "catalog.db")
+    r = cull_shoot(new, "new", others, make_model=Logistic, shortlist_target=0.94)
+    kept = {pid for pid, d, *_ in r.rows if d == "selected"}
+    assert r.best and r.best < kept                                    # Best is part of the shortlist, not all of it
+    usual = np.mean([v for o in others for (v,) in Catalog(o).db.execute("SELECT selected FROM labels")])
+    assert abs(len(r.best) - usual * 240) <= max(3, 0.25 * usual * 240)
+    new.save_cull(r.rows, {}, r.frames, r.best)
+    tiers = dict(new.db.execute("SELECT (decision = 'selected') + best, COUNT(*) FROM cull GROUP BY 1"))
+    assert tiers[2] == len(r.best) and tiers[1] == len(kept) - len(r.best)
+    root = make_drive(tmp_path, new)
+    out = tmp_path / "laptop" / "Out"
+    apply(root, out, jobs_from(new, "list"), progress=lambda s: None)
+    assert len(list((out / "Selected").rglob("*.JPG"))) == len(r.best)
+    assert len(list((out / "Maybe").rglob("*.JPG"))) == len(kept) - len(r.best)
+    assert not (out / "Not selected").exists()
+    undo(out)
+    assert not out.exists()
+
+
 def test_past_weddings_are_read_once_and_kept(tmp_path):
     """The features of a past wedding are saved next to its catalog: the next cull loads exactly
     the same numbers in a moment, and a changed catalog is read again."""

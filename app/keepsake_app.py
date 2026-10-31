@@ -64,7 +64,7 @@ PROGRESS = re.compile(r"([\d,]+)\s*/\s*([\d,]+)\s+([\d.]+)%.*?about (.+?) left")
 COPIED = re.compile(r"copied ([\d,]+) files \(([\d,.]+) GB, ([\d,.]+) MB/s\), ([\d,]+) to go")
 WIDE = 1.5                # "Wider": 1.5x the studio's usual share, so Selected holds more of the studio's own picks
 COPY_MB_S = 45            # typical speed from a USB photo drive, for the estimate shown before starting
-COPYING = re.compile(r"Copying ([\d,]+) Selected(?: and ([\d,]+) Not selected)?")
+COPYING = re.compile(r"Copying ([\d,]+) Selected(?:, ([\d,]+) Maybe)?(?: and ([\d,]+) Not selected)?")
 SELECTED_LINE = re.compile(r"^\s*Selected\s+([\d,]+) of ([\d,]+)")
 NOT_SELECTED_LINE = re.compile(r"^\s*Not selected\s+([\d,]+)")
 SHOTS_LINE = re.compile(r"^\s*Shots\s+([\d,]+)")
@@ -180,6 +180,7 @@ class Job:
                     st["state"] = "done"
                 self.result.update({"output": str(self.output),
                                     "selected_dir": str(self.output / "Selected"),
+                                    "maybe_dir": str(self.output / "Maybe"),
                                     "not_selected_dir": str(self.output / "Not selected"),
                                     "copied_not_selected": copy_not_selected})
                 self.result.update(counts(self.shoot_name))      # includes photos moved by hand earlier
@@ -243,7 +244,7 @@ class Job:
         with self.lock:
             st = self.stages["copy"]
             if m:
-                st["total"] = number(m.group(1)) + (number(m.group(2)) if m.group(2) else 0)
+                st["total"] = sum(number(g) for g in m.groups() if g)
             m = COPIED.search(line)
             if m:
                 done, gb, rate, left = number(m.group(1)), float(m.group(2).replace(",", "")), \
@@ -312,15 +313,20 @@ def thumbs(shoot: str, which: str, n: int) -> list[str]:
 
 
 def gallery(shoot: str, which: str) -> list[dict]:
-    """Every selected (or not selected) photo of the current wedding, in time order, with its file
-    name and KeepSake's reason, for the gallery and the big view."""
+    """Every photo of one folder of the current wedding (selected, maybe or not_selected), in time
+    order, with its file name and KeepSake's reason, for the gallery and the big view."""
     db = CACHE_DIR / shoot / "catalog.db"
-    want = "selected" if which == "selected" else "removed"
+    where = {"selected": "c.decision = 'selected' AND c.best = 1", "maybe": "c.decision = 'selected' AND c.best = 0"
+             }.get(which, "c.decision = 'removed'")
     try:
-        return entries(db, shoot, "WHERE c.decision = ? ORDER BY p.taken_s, p.path", (want,), frames_of=True) \
-            if db.exists() else []
+        return entries(db, shoot, f"WHERE {where} ORDER BY p.taken_s, p.path", frames_of=True) if db.exists() else []
     except sqlite3.Error:
         return []
+
+
+def tier_of(decision: str, best) -> str:
+    """'selected' (the Selected folder), 'maybe' (the rest of a Shortlist) or 'not_selected'."""
+    return "not_selected" if decision != "selected" else "selected" if best else "maybe"
 
 
 def _in(ids) -> str:
@@ -345,19 +351,20 @@ def up_to_date(db: Path) -> None:
 
 def entries(db: Path, shoot: str, where: str, args=(), frames_of: bool = False) -> list[dict]:
     """Photos of the wedding for the gallery and the big view: {id, u (thumbnail), name, reason,
-    sel (in Selected), moved (by a person), mine (a frame the person chose), rank (KeepSake's order
+    sel (kept: in Selected or Maybe), tier (selected / maybe / not_selected), moved (by a person), mine (a frame the person chose), rank (KeepSake's order
     of the frames of its shot, 1 = its best), t (time taken), frames (other frames of the shot,
     with frames_of)}."""
     up_to_date(db)
     rows = read_db(db, "SELECT c.id, p.path, c.decision, COALESCE(c.reason, ''), c.changed, c.similar, c.shot, "
-                       "c.frame_rank, COALESCE(p.taken_s, 0) FROM cull c JOIN photos p ON p.id = c.id " + where, args)
+                       "c.frame_rank, COALESCE(p.taken_s, 0), c.best FROM cull c JOIN photos p ON p.id = c.id " + where, args)
     rows = [r for r in rows if cache_path(CACHE_DIR / shoot, "thumbs", r[0]).exists()]
     reasons = live_reasons(db, [(pid, reason, changed, similar) for pid, _, _, reason, changed, similar, *_ in rows])
     size = dict(read_db(db, "SELECT shot, COUNT(*) FROM cull WHERE shot IS NOT NULL GROUP BY shot")) if frames_of else {}
     return [{"id": pid, "u": f"/photo/{shoot}/{pid}", "name": Path(path).name, "reason": reasons[pid],
              "sel": decision == "selected", "moved": bool(changed), "mine": bool(changed) and reasons[pid].startswith(MINE),
-             "rank": rank, "t": taken, **({"frames": size.get(shot, 1) - 1} if frames_of else {})}
-            for pid, path, decision, _, changed, _, shot, rank, taken in rows]
+             "tier": tier_of(decision, best), "rank": rank, "t": taken,
+             **({"frames": size.get(shot, 1) - 1} if frames_of else {})}
+            for pid, path, decision, _, changed, _, shot, rank, taken, best in rows]
 
 
 # --- Swap frame: the other frames of a photo's shot, and choosing one of them instead -------------
@@ -455,19 +462,20 @@ def frames(shoot: str, pid: int) -> dict:
 
 
 def swap_frame(new: int, old: int) -> dict:
-    """Swap frame: `new` (Not selected) goes into Selected in place of `old` (Selected), as one
+    """Swap frame: `new` (Not selected) goes into Selected (or Maybe) in place of `old`, as one
     change: both copies move (as with Move) and Undo is the same swap the other way round."""
     with JOB.lock:
         shoot = JOB.shoot_name or ""
     db = CACHE_DIR / shoot / "catalog.db"
     if new == old or not db.exists():
         raise MoveError("Choose another frame.")
-    state = dict(read_db(db, "SELECT id, decision FROM cull WHERE id IN (?, ?)", (new, old)))
-    if state.get(new) != "removed":
-        raise MoveError("That frame is already in Selected." if state.get(new) else "That photo is not part of this wedding.")
-    if state.get(old) != "selected":
-        raise MoveError("The photo it replaces is not in Selected any more.")
-    move_photo(new, "selected")
+    state = {i: tier_of(d, b) for i, d, b in read_db(db, "SELECT id, decision, best FROM cull WHERE id IN (?, ?)", (new, old))}
+    if state.get(new) != "not_selected":
+        raise MoveError(f"That frame is already in {TIER_NAME[state[new]]}." if new in state
+                        else "That photo is not part of this wedding.")
+    if state.get(old) not in ("selected", "maybe"):
+        raise MoveError("The photo it replaces is not in Selected or Maybe any more.")
+    move_photo(new, state[old])                           # into the same folder as the frame it replaces
     try:
         move_photo(old, "not_selected")
     except MoveError:
@@ -484,24 +492,31 @@ def swap_frame(new: int, old: int) -> dict:
 
 
 def counts(shoot: str | None) -> dict:
-    """Selected / Not selected / moved by hand (and the studio's picks found, when known), from the catalog."""
+    """Selected / Maybe / Not selected / moved by hand, and the studio's picks found when known:
+    in Selected, in Selected or Maybe, and counting a near-identical frame of the same shot."""
     db = CACHE_DIR / (shoot or "") / "catalog.db"
     if not shoot or not db.exists():
         return {}
     try:
-        sel, total, moved = read_db(db, "SELECT COALESCE(SUM(decision = 'selected'), 0), COUNT(*), "
-                                        "COALESCE(SUM(changed), 0) FROM cull")[0]
-        picks, found = read_db(db, "SELECT COUNT(*), COALESCE(SUM(c.decision = 'selected'), 0) FROM labels l "
-                                   "JOIN cull c ON c.id = l.id WHERE l.selected = 1")[0]
+        up_to_date(db)
+        sel, maybe, total, moved = read_db(
+            db, "SELECT COALESCE(SUM(decision = 'selected' AND best = 1), 0), COALESCE(SUM(decision = 'selected' "
+                "AND best = 0), 0), COUNT(*), COALESCE(SUM(changed), 0) FROM cull")[0]
+        picks, found, kept = read_db(
+            db, "SELECT COUNT(*), COALESCE(SUM(c.decision = 'selected' AND c.best = 1), 0), "
+                "COALESCE(SUM(c.decision = 'selected'), 0) FROM labels l JOIN cull c ON c.id = l.id WHERE l.selected = 1")[0]
+        near = read_db(db, "SELECT COUNT(*) FROM labels l JOIN cull c ON c.id = l.id WHERE l.selected = 1 AND "
+                           "(c.decision = 'selected' OR c.shot IN (SELECT shot FROM cull WHERE decision = 'selected' "
+                           "AND shot IS NOT NULL))")[0][0] if picks else 0
     except sqlite3.Error:
         return {}
-    out = {"selected": sel, "not_selected": total - sel, "total": total, "moved": moved}
+    out = {"selected": sel, "maybe": maybe, "not_selected": total - sel - maybe, "total": total, "moved": moved}
     if picks:
-        out.update(studio_picks=picks, studio_in_selected=found)
+        out.update(studio_picks=picks, studio_in_selected=found, studio_in_kept=kept, studio_near=near)
     return out
 
 
-# --- A person's change: move one photo between Selected and Not selected ---------------------
+# --- A person's change: move one photo between Selected, Maybe and Not selected -------------
 
 class MoveError(Exception):
     """Why a photo could not be moved, in plain words."""
@@ -511,12 +526,15 @@ MOVE_LOCK = threading.Lock()
 BEFORE_MOVE: dict[tuple[str, int], tuple] = {}      # KeepSake's own verdict, so Undo puts it back exactly
 
 
+TIER_NAME = {"selected": "Selected", "maybe": "Maybe", "not_selected": "Not selected"}
+
+
 def move_photo(pid: int, to: str) -> dict:
-    """Move one photo (and its RAW/JPEG companion) of the finished wedding to Selected or Not
-    selected. Its copy moves between the two folders; a photo that was only listed is copied from
-    the drive (read only, checksum checked, as in ks apply). Nothing is ever deleted."""
-    if to not in ("selected", "not_selected"):
-        raise MoveError("Choose Selected or Not selected.")
+    """Move one photo (and its RAW/JPEG companion) of the finished wedding to Selected, Maybe or Not
+    selected. Its copy moves between the folders; a photo that was only listed is copied from the
+    drive (read only, checksum checked, as in ks apply). Nothing is ever deleted."""
+    if to not in TIER_NAME:
+        raise MoveError("Choose Selected, Maybe or Not selected.")
     with JOB.lock:
         if JOB.status == "running" and JOB.result.get("ready"):
             raise MoveError("You can move photos as soon as copying finishes"
@@ -524,34 +542,35 @@ def move_photo(pid: int, to: str) -> dict:
         if JOB.status != "done" or not JOB.shoot_name:
             raise MoveError("Finish culling this wedding first.")
         shoot, root, out = JOB.shoot_name, Path(JOB.folder), Path(JOB.output)
-    decision = "selected" if to == "selected" else "removed"
-    folder = deliver.SELECTED if to == "selected" else deliver.NOT_SELECTED
+    decision = "removed" if to == "not_selected" else "selected"
+    best = int(to == "selected")
+    folder = deliver.folder_for(decision, best)
     with MOVE_LOCK, Catalog(CACHE_DIR / shoot / "catalog.db") as cat:
-        row = cat.db.execute("SELECT p.path, p.companion, c.decision, c.unsure, c.reason, c.changed "
+        row = cat.db.execute("SELECT p.path, p.companion, c.decision, c.best, c.unsure, c.reason, c.changed "
                              "FROM cull c JOIN photos p ON p.id = c.id WHERE c.id = ?", (pid,)).fetchone()
         if row is None:
             raise MoveError("That photo is not part of this wedding.")
-        path, companion, now, unsure, reason, changed = row
-        if now != decision:
-            before = BEFORE_MOVE.setdefault((shoot, pid), (now, unsure, reason, changed))
-            back = before[0] == decision and not before[3]          # Undo: KeepSake's own verdict again
+        path, companion, now, now_best, unsure, reason, changed = row
+        if tier_of(now, now_best) != to:
+            before = BEFORE_MOVE.setdefault((shoot, pid), (now, now_best, unsure, reason, changed))
+            back = tier_of(before[0], before[1]) == to and not before[4]   # Undo: KeepSake's own verdict again
             earlier = deliver.read_manifest(out).get(path, {})
             has_copy = bool(earlier.get("copy")) and (out / earlier["copy"]).exists()
-            if folder == deliver.SELECTED and not has_copy and not root.is_dir():
-                raise MoveError("Plug in the photo drive first: this photo is copied from it into Selected.")
-            job = deliver.Job(pid, folder, before[1] if back else 0, (before[2] or "") if back else "moved by you",
-                              path, folder == deliver.SELECTED)
+            if folder != deliver.NOT_SELECTED and not has_copy and not root.is_dir():
+                raise MoveError(f"Plug in the photo drive first: this photo is copied from it into {folder}.")
+            job = deliver.Job(pid, folder, before[2] if back else 0, (before[3] or "") if back else "moved by you",
+                              path, folder != deliver.NOT_SELECTED)
             try:
                 deliver.apply(root, out, [(job, companion)], progress=lambda _line: None)
             except (deliver.OutputError, OSError) as e:
                 raise MoveError(f"Could not move {Path(path).name}: {e}") from e
             if back:
                 with cat.db:
-                    cat.db.execute("UPDATE cull SET decision = ?, unsure = ?, reason = ?, changed = 0 WHERE id = ?",
-                                   (decision, before[1], before[2], pid))
+                    cat.db.execute("UPDATE cull SET decision = ?, best = ?, unsure = ?, reason = ?, changed = 0 "
+                                   "WHERE id = ?", (decision, before[1], before[2], before[3], pid))
                 BEFORE_MOVE.pop((shoot, pid), None)
             else:
-                cat.move([pid], decision)
+                cat.move([pid], decision, best=bool(best))
     result = counts(shoot)
     with JOB.lock:
         JOB.result.update(result)
@@ -634,6 +653,8 @@ class Handler(BaseHTTPRequestHandler):
         kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         if path.suffix in (".otf", ".ttf"):
             kind = "font/otf" if path.suffix == ".otf" else "font/ttf"
+        elif path.suffix == ".js":
+            kind = "text/javascript"                 # Windows can say text/plain, which a module refuses
         self.send(200, path.read_bytes(), kind)
 
     def do_GET(self) -> None:
@@ -753,7 +774,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"error": str(e) or "bad request"}, 400)
         if path == "/api/open":
             which = data.get("which")
-            target = {"selected": JOB.result.get("selected_dir"), "not_selected": JOB.result.get("not_selected_dir"),
+            target = {"selected": JOB.result.get("selected_dir"), "maybe": JOB.result.get("maybe_dir"),
+                      "not_selected": JOB.result.get("not_selected_dir"),
                       "output": JOB.result.get("output")}.get(which)
             if target and Path(target).is_dir():
                 open_folder(Path(target))
@@ -786,7 +808,8 @@ def app_window(url: str) -> subprocess.Popen | None:
     for exe in candidates:
         if exe.is_file():
             return subprocess.Popen([str(exe), f"--app={url}", f"--user-data-dir={profile}",
-                                     "--window-size=1440,900", "--no-first-run", "--no-default-browser-check"])
+                                     "--window-size=1440,900", "--no-first-run", "--no-default-browser-check",
+                                     "--autoplay-policy=no-user-gesture-required"])     # the opening's sounds
     webbrowser.open(url)
     return None
 

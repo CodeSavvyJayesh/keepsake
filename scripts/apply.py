@@ -5,7 +5,8 @@ r"""Phase 4: copy the cull into Selected and Not selected folders on this laptop
 
 The photo drive is only read: every original is copied with a checksum check (see
 engine/deliver.py), keeping its event folders and file name. --changes takes the file saved
-from the review page (your moves). --removed list copies only Selected and lists the Not selected
+from the review page (your moves). A Shortlist has a third folder, Maybe: the rest of the
+shortlist, after the best in Selected. --removed list copies only Selected and lists the Not selected
 photos in the manifest (saves space). Running it again carries on where it stopped.
 Undo with:  ks undo "output folder"
 """
@@ -21,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
 from engine.config import DATA_DIR  # noqa: E402
-from engine.deliver import MANIFEST, README, SELECTED, OutputError, apply, jobs_from  # noqa: E402
+from engine.deliver import MANIFEST, MAYBE, README, SELECTED, OutputError, apply, jobs_from  # noqa: E402
 from engine.ingest import duration, shoot_for  # noqa: E402
 
 
@@ -83,8 +84,11 @@ def main() -> int:
             print(f"No photos in a folder called '{only}' (give the event folder name as it is on the drive)")
             return 1
     n_sel = sum(1 for j, _ in jobs if j.folder == SELECTED)
-    print(f"Copying {n_sel:,} Selected" + (f" and {len(jobs) - n_sel:,} Not selected" if removed == "copy" else
-                                          f" (and listing {len(jobs) - n_sel:,} Not selected)") + f" photos to {out}")
+    n_maybe = sum(1 for j, _ in jobs if j.folder == MAYBE)
+    n_not = len(jobs) - n_sel - n_maybe
+    print(f"Copying {n_sel:,} Selected" + (f", {n_maybe:,} Maybe" if n_maybe else "")
+          + (f" and {n_not:,} Not selected" if removed == "copy" else f" (and listing {n_not:,} Not selected)")
+          + f" photos to {out}")
     start = time.perf_counter()
     try:
         report = apply(root, out, jobs)

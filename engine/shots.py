@@ -195,11 +195,13 @@ SHORTLIST_FAULT_W = 3.0      # a moment whose best frame breaks the face rule co
 
 
 def shortlist(rows: np.ndarray, score: np.ndarray, frame_score: np.ndarray, shot: np.ndarray,
-              target: float = SHORTLIST_TARGET) -> tuple[np.ndarray, dict[int, int]]:
+              target: float = SHORTLIST_TARGET, first=(), max_keep: int | None = None
+              ) -> tuple[np.ndarray, dict[int, int]]:
     """The best frame of each moment, best moments first, until the moments kept are expected to hold
     `target` of the studio's picks. Moments are ranked by how many picks they are expected to hold
     (the sum of their frames' chances), so a long burst of a key moment counts for more than one
-    frame. Returns the same as one_per_shot."""
+    frame. The moments of the rows in `first` come first, whatever their rank; no more than
+    `max_keep` moments are kept after them. Returns the same as one_per_shot."""
     a, b = SHORTLIST_CAL
     by = defaultdict(list)
     for i in rows:
@@ -207,10 +209,13 @@ def shortlist(rows: np.ndarray, score: np.ndarray, frame_score: np.ndarray, shot
     groups = list(by.values())
     expected = np.array([float(np.sum(1 / (1 + np.exp(-(a * score[m] + b))))) for m in (np.array(g) for g in groups)])
     order = np.argsort(-expected, kind="mergesort")
+    where = {shot[g[0]]: k for k, g in enumerate(groups)}
+    lead = list(dict.fromkeys(where[shot[i]] for i in first))
+    leading = set(lead)
     need = target * expected.sum()
     chosen, kept_in, got = [], {}, 0.0
-    for k in order:
-        if got >= need:
+    for k in lead + [k for k in order if k not in leading]:
+        if k not in leading and (got >= need or (max_keep is not None and len(chosen) >= max_keep)):
             break
         members = groups[k]
         best = max(members, key=lambda i: frame_score[i])
@@ -219,6 +224,35 @@ def shortlist(rows: np.ndarray, score: np.ndarray, frame_score: np.ndarray, shot
             kept_in[i] = best
         got += expected[k]
     return np.array(chosen, dtype=int), kept_in
+
+
+SHORTLIST_MAX = 0.45         # Shortlist never keeps more than this share of a wedding's photos
+
+
+BEST_BY = "shortlist"          # Selected = the first moments of the Shortlist (blind test, 11 weddings:
+                              # 47% of the studio's picks with a near-identical frame, against 37% when
+                              # ranked like Studio style by each shot's best photo)
+
+
+def tiers(rows: np.ndarray, best_score: np.ndarray, short_score: np.ndarray, frame_score: np.ndarray,
+          shot: np.ndarray, best_n: int, target: float = SHORTLIST_TARGET, max_share: float = SHORTLIST_MAX,
+          best_by: str = BEST_BY) -> tuple[np.ndarray, np.ndarray, dict[int, int]]:
+    """Selected in two tiers. Best: the best frame of best_n shots (the studio's usual share): the
+    Shortlist's first moments (best_by 'shortlist', the moments expected to hold the most picks) or
+    the shots ranked like Studio style ('studio', by their best photo). Maybe: the rest of the
+    Shortlist's moments, until they are expected to hold `target` of the studio's picks, but never
+    more than `max_share` of the photos in all.
+    Returns (Best rows, all kept rows - Best first, then Maybe - and {row: kept row of its shot})."""
+    cap = int(max_share * len(rows))
+    if best_by == "shortlist":
+        chosen, kept_in = shortlist(rows, short_score, frame_score, shot, target, max_keep=max(best_n, cap))
+        if len(chosen) < best_n:                 # a tiny target: Selected still gets the usual share
+            chosen, kept_in = shortlist(rows, short_score, frame_score, shot, 1.0, max_keep=best_n)
+        return chosen[:best_n], chosen, kept_in
+    best, _ = one_per_shot(rows, best_score, frame_score, shot, best_n)
+    chosen, kept_in = shortlist(rows, short_score, frame_score, shot, target, first=best,
+                                max_keep=max(len(best), cap))
+    return best, chosen, kept_in
 
 
 def one_per_shot(rows: np.ndarray, score: np.ndarray, frame_score: np.ndarray, shot: np.ndarray,

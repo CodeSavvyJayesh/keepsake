@@ -38,7 +38,7 @@ import numpy as np
 from .catalog import Catalog
 from .learn import GBM, Dataset, Logistic, combine, lightgbm_available, past_wedding, photo_features
 from .shots import (CLIP_WEIGHT, FACE_DETAILS, FAULT_FRAME_W, FAULT_SHOT_W, SHORTLIST_FAULT_W, centred_clip, clip_ridge,
-                    face_details, face_faults, shortlist,
+                    face_details, face_faults, tiers,
                     fault_words, frame_penalty, group_shots,
                     one_per_shot, relative_to_shot, train_frame_ranker)
 
@@ -63,6 +63,8 @@ class CullResult:
     style: str = "safe"
     shots: int = 0                            # studio style: shots in this shoot
     frames: dict = field(default_factory=dict)  # studio style: {photo id: (shot, KeepSake's frame rank)}
+    best: set | None = None                   # Shortlist: the Selected photos in the top tier (the rest: Maybe)
+    picks: set = field(default_factory=set)   # the studio's picks, when known (for the report only)
 
 
 def model_factory():
@@ -238,8 +240,11 @@ def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], kee
         - frame_penalty(data.X[mine], data.names) - FAULT_FRAME_W * bad[mine]
     share = (keep_share if keep_share is not None else float(data.y[rows].mean())) * wide
     n_me = len(mine)
+    best_rows = None
     if target:
-        chosen, kept_in = shortlist(mine, score - SHORTLIST_FAULT_W * bad, frame, shot, target)
+        usual = keep_share if keep_share is not None else float(data.y[rows].mean())
+        best_rows, chosen, kept_in = tiers(mine, score - FAULT_SHOT_W * bad, score - SHORTLIST_FAULT_W * bad, frame,
+                                           shot, max(1, int(round(usual * n_me))), target)
         share = len(chosen) / max(n_me, 1)
     else:
         chosen, kept_in = one_per_shot(mine, score - FAULT_SHOT_W * bad, frame, shot, max(1, int(round(share * n_me))))
@@ -279,10 +284,12 @@ def studio_style(cat: Catalog, name: str, me: Dataset, train: list[Dataset], kee
     result = CullResult(rows_out, "other weddings", [d.meta["wedding"] for d in train], len(rows),
                         int(data.y[rows].sum()), share, model_name, reasons, unread=len(unread),
                         style="studio", shots=len(set(shot[mine].tolist())),
-                        frames=frame_ranks(me.ids, shot[mine], frame[mine]))
+                        frames=frame_ranks(me.ids, shot[mine], frame[mine]),
+                        best={int(me.ids[local[g]]) for g in best_rows} if best_rows is not None else None)
     y_me = me.y
     if (y_me == 1).any():
         result.caught = (int(((y_me == 1) & keep).sum()), int((y_me == 1).sum()))
+        result.picks = {int(pid) for pid, yy in zip(me.ids, y_me) if yy == 1}
     return result
 
 

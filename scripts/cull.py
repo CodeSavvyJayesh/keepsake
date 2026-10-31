@@ -150,7 +150,7 @@ def main() -> int:
         settings = {"when": now_text(), "style": result.style, "target": target, "keep_share": result.keep_share,
                     "unsure_band": UNSURE_BAND, "mode": result.mode, "model": result.model,
                     "trained_on": result.trained_on}
-        cat.save_cull(result.rows, settings, result.frames)
+        cat.save_cull(result.rows, settings, result.frames, result.best)
         page = review_page(shoot, cat)
 
     total = len(result.rows)
@@ -174,10 +174,18 @@ def main() -> int:
     else:
         how = [f"  Model               {result.model}; aim: keep {target:.0%} of what the studio would pick",
                f"  Shortlist size      {result.keep_share:.0%} of photos, plus {UNSURE_BAND:.0%} 'AI unsure' kept for you to check"]
+    if result.best is not None:                 # Shortlist in two tiers: Selected (the best) and Maybe
+        maybe = selected - len(result.best)
+        selected = len(result.best)
+        tier = [f"  Selected            {selected:,} of {total:,} ({selected / max(total, 1):.0%}); the best, about "
+                "the studio's usual share",
+                f"  Maybe               {maybe:,} ({maybe / max(total, 1):.0%}); the rest of the shortlist, "
+                f"{d[('selected', 1)]:,} of them AI unsure"]
+    else:
+        tier = [f"  Selected            {selected:,} of {total:,} ({selected / max(total, 1):.0%}); "
+                f"{d[('selected', 1)]:,} of them AI unsure"]
     lines = [f"KeepSake cull - {shoot.name} - {now_text()}", "",
-             f"  Learned from        {learned}", *how, "",
-             f"  Selected            {selected:,} of {total:,} ({selected / max(total, 1):.0%}); "
-             f"{d[('selected', 1)]:,} of them AI unsure",
+             f"  Learned from        {learned}", *how, "", *tier,
              f"  Not selected        {removed:,} ({removed / max(total, 1):.0%})"]
     for kind, n in result.reasons.most_common():
         lines.append(f"    {kind:<44}{n:>7,}")
@@ -185,9 +193,14 @@ def main() -> int:
         lines.append(f"  Could not be read   {result.unread:,} (kept in Selected for you to check)")
     if result.caught:
         got, picks = result.caught
-        lines += ["", f"  Check against the studio's own choices (not used to decide this shoot):",
-                  f"    studio picks in Selected  {got:,} of {picks:,} ({got / max(picks, 1):.0%})",
-                  f"    studio picks removed      {picks - got:,}"]
+        lines += ["", f"  Check against the studio's own choices (not used to decide this shoot):"]
+        if result.best is not None:
+            top = sum(1 for r in result.rows if r[0] in result.best and r[0] in result.picks)
+            lines.append(f"    studio picks in Selected  {top:,} of {picks:,} ({top / max(picks, 1):.0%})")
+            lines.append(f"    in Selected or Maybe      {got:,} of {picks:,} ({got / max(picks, 1):.0%})")
+        else:
+            lines.append(f"    studio picks in Selected  {got:,} of {picks:,} ({got / max(picks, 1):.0%})")
+        lines.append(f"    studio picks removed      {picks - got:,}")
     lines += ["", f"  Time                {duration(time.perf_counter() - start)}"]
     text = "\n".join(lines)
     print("\n" + text)

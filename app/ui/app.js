@@ -1,9 +1,20 @@
 import { Scene } from '/ui/scene.js';
+import { Sound } from '/ui/sound.js';
 
 const $ = s => document.querySelector(s);
 const fmt = n => (n ?? 0).toLocaleString('en-IN');
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const scene = new Scene($('#scene'));
+const sound = new Sound();
+function cue(kind, card) {                 // a sound for the scene (and a note of it when a demo is filmed)
+  const opts = card ? { pan: card.pan, seed: card.i } : {};
+  sound.play(kind, opts);
+  if (window.__ksRecord) (window.__ksEvents = window.__ksEvents || []).push({ kind, at: performance.now() / 1000, ...opts });
+}
+const SPEAKER = on => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/>${on ? '<path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>' : '<path d="M16 9.5l5 5M21 9.5l-5 5"/>'}</svg>`;
+function showSound() { const b = $('#soundBtn'); b.innerHTML = SPEAKER(sound.on); b.title = sound.on ? 'Sound on (click to turn off)' : 'Sound off (click to turn on)'; }
+$('#soundBtn').onclick = () => { sound.setOn(!sound.on); showSound(); };
+showSound();
 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
@@ -44,16 +55,18 @@ async function boot() {
   if (st.status === 'running' || st.status === 'done') {          // the window was reopened: no opening scene
     scene.start(); scene.open(); ready();
     if (st.status === 'running') return follow(st);
-    finish(st); return;
+    finish(st, false); return;
   }
   // scene time, with a wall-clock safety net so the app always opens
   const either = (p, ms) => Promise.race([p, wait(ms)]);
   await wait(450);
-  await either(scene.start(), 9000);                  // the photos are dealt into a tiny tilted ring
+  scene.onEvent = cue; cue('start');                  // the music (sound.js) follows the scene's moments
+  await either(scene.start(), 9000);                  // the photos scatter up into a tiny tilted ring
   await either(scene.wait(0.7), 2500);                // a beat to see the ring
   scene.open(); document.body.classList.add('drop');  // the camera drops inside
   await either(scene.wait(1.5), 4000);
-  ready(); show('welcome');
+  scene.onEvent = null;
+  ready(); show('welcome'); cue('end');
 }
 
 function renderRecent(list) {
@@ -105,7 +118,7 @@ $('#outBtn').onclick = async () => {
   const r = await api('/api/choose', { kind: 'output', start: pick.output }).catch(e => toast(e.message));
   if (r?.path) { pick.output = r.path; $('#outPath').textContent = r.path; }
 };
-const KEEP_NOTE = { '0.07': 'about 7 in 100', studio: 'about 1 in 10, like your studio', wide: '1.5x your studio: catches more of your picks', shortlist: 'about 4 in 10, holding 9 in 10 of your moments' };
+const KEEP_NOTE = { '0.07': 'about 7 in 100', studio: 'about 1 in 10, like your studio', wide: '1.5x your studio: catches more of your picks', shortlist: 'Selected: your usual share · Maybe: the rest, together 9 in 10 of your picks' };
 $('#keepSeg').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   $('#keepSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
@@ -146,7 +159,8 @@ function render(st) {
   $('#readyRow').hidden = !ready;
   if (ready) {
     result = st.result;
-    $('#readyText').innerHTML = `<b>${fmt(st.result.selected)}</b> photos chosen · copying them now`;
+    $('#readyText').innerHTML = `<b>${fmt(st.result.selected)}</b> Selected` + (st.result.maybe ? ` + <b>${fmt(st.result.maybe)}</b> Maybe` : '')
+      + ' · copying them now';
   }
 }
 async function poll(st) {
@@ -181,26 +195,41 @@ function countUp(el, to, ms = 1800) {
   requestAnimationFrame(step);
 }
 let result = {};
-function finish(st) {
+function finish(st, fresh = true) {
   document.body.classList.remove('copying');
+  if (fresh) cue('done');
   const r = result = st.result || {};
   show('done');
   api('/api/thumbs?set=selected&n=60').then(x => scene.sort(x.photos)).catch(() => {});
   $('#doneKicker').textContent = `Finished · ${st.name}`;
   countUp($('#doneSel'), r.selected || 0);
   const total = r.total || (r.selected || 0) + (r.not_selected || 0);
-  $('#doneSub').textContent = `From ${fmt(total)} photos · ${r.time || st.elapsed_text} · saved in ${r.output || st.output}`;
+  $('#doneSub').textContent = (r.maybe ? `+ ${fmt(r.maybe)} more in Maybe · ` : '')
+    + `From ${fmt(total)} photos · ${r.time || st.elapsed_text} · saved in ${r.output || st.output}`;
   renderStats();
 }
 function renderStats() {
   const r = result;
   $('#openNot').hidden = !(r.copied_not_selected !== false || r.moved);
-  const stats = [['Selected', fmt(r.selected)], ['Not selected', fmt(r.not_selected)], ['Moments', r.shots ? fmt(r.shots) : '—']];
-  if (r.studio_picks) stats.push(['Studio’s picks found', `${fmt(r.studio_in_selected)} / ${fmt(r.studio_picks)}`]);
+  const pct = (a, b) => `${Math.round(100 * (a || 0) / Math.max(b || 0, 1))}%`;
+  const stats = [['Selected', fmt(r.selected)]];
+  if (r.maybe) stats.push(['Maybe', fmt(r.maybe)]);
+  stats.push(['Not selected', fmt(r.not_selected)]);
+  if (!r.maybe) stats.push(['Moments', r.shots ? fmt(r.shots) : '—']);
+  if (r.studio_picks) {
+    stats.push(['Studio’s picks in Selected', `${fmt(r.studio_in_selected)} / ${fmt(r.studio_picks)}`, pct(r.studio_in_selected, r.studio_picks)]);
+    if (r.maybe || r.studio_near > r.studio_in_selected)
+      stats.push([r.maybe ? 'With Maybe' : 'With near frames', `${fmt(r.studio_near)} / ${fmt(r.studio_picks)}`,
+                  `${pct(r.studio_near, r.studio_picks)} · counting near-identical frames`]);
+  }
   if (r.moved) stats.push(['Moved by you', fmt(r.moved)]);
-  $('#stats').innerHTML = stats.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  $('#stats').innerHTML = stats.map(([k, v, sub]) =>
+    `<div><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`).join('');
   $('#gSeg').querySelector('[data-set=selected]').innerHTML = `Selected <i>${fmt(r.selected)}</i>`;
+  $('#gSeg').querySelector('[data-set=maybe]').innerHTML = `Maybe <i>${fmt(r.maybe)}</i>`;
+  $('#gSeg').querySelector('[data-set=maybe]').hidden = !r.maybe && gSet !== 'maybe';
   $('#gSeg').querySelector('[data-set=not_selected]').innerHTML = `Not selected <i>${fmt(r.not_selected)}</i>`;
+  $('#openMaybe').hidden = !r.maybe;
 }
 document.querySelectorAll('[data-open]').forEach(b => (b.onclick = () => api('/api/open', { which: b.dataset.open }).catch(e => toast(e.message))));
 $('#againBtn').onclick = async () => {
@@ -211,9 +240,9 @@ $('#againBtn').onclick = async () => {
 
 // ---------- gallery and the big view (a person can move any photo across) ----------
 let gList = [], gIdx = 0, gSet = 'selected';
-const other = set => (set === 'selected' ? 'not_selected' : 'selected');
-const setOf = p => (p.sel ?? gSet === 'selected') ? 'selected' : 'not_selected';
-const LABEL = { selected: 'Selected', not_selected: 'Not selected' };
+const TIERS = ['selected', 'maybe', 'not_selected'];           // the three folders
+const LABEL = { selected: 'Selected', maybe: 'Maybe', not_selected: 'Not selected' };
+const setOf = p => p.tier || gSet;
 const ARROW = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
 const STACK = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="7" y="3" width="14" height="14" rx="2"/><path d="M17 21H5a2 2 0 0 1-2-2V7"/></svg>';
 const CHECK = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
@@ -234,20 +263,27 @@ function renderGrid() {
   grid.innerHTML = '';
   gList.forEach(p => frag.appendChild(tile(p)));
   grid.appendChild(frag);
-  $('#gCount').textContent = `${fmt(gList.length)} photos`;
+  showCount();
 }
+const showCount = () => ($('#gCount').textContent = `${fmt(gList.filter(p => !p.gone).length)} photos`);
 function tile(p) {
   const f = document.createElement('figure'), img = new Image();
   f.dataset.id = p.id; f.title = p.name;
   img.loading = 'lazy'; img.decoding = 'async'; img.onload = () => img.classList.add('in'); img.src = p.u; img.alt = p.name;
   f.appendChild(img);
-  if (p.moved) f.insertAdjacentHTML('beforeend', `<span class="t-badge">${p.mine ? 'Your frame' : 'Moved by you'}</span>`);
-  if (p.frames && gSet === 'selected')
-    f.insertAdjacentHTML('beforeend', `<span class="t-frames" title="${p.frames} other frame${p.frames > 1 ? 's' : ''} of this shot: open the photo to choose another">${STACK}+${fmt(p.frames)}</span>`);
-  const b = document.createElement('button');
-  b.className = 't-move'; b.innerHTML = `Move to ${LABEL[other(gSet)]} ${ARROW}`; b.title = `Move to ${LABEL[other(gSet)]}`;
-  b.onclick = e => { e.stopPropagation(); movePhoto(p); };
-  f.appendChild(b);
+  if (p.gone) { f.classList.add('gone'); f.insertAdjacentHTML('beforeend', `<span class="t-badge gone">Now in ${LABEL[setOf(p)]}</span>`); }
+  else if (p.moved) f.insertAdjacentHTML('beforeend', `<span class="t-badge">${p.mine ? 'Your frame' : 'Moved by you'}</span>`);
+  if (p.frames && gSet !== 'not_selected')
+    f.insertAdjacentHTML('beforeend', `<span class="t-frames" title="${p.frames} similar frame${p.frames > 1 ? 's' : ''} of this shot, each in its own folder: open the photo to see them and move any one of them">${STACK}+${fmt(p.frames)} similar</span>`);
+  const moves = document.createElement('div');
+  moves.className = 't-moves';
+  TIERS.filter(t => t !== setOf(p)).forEach(t => {
+    const b = document.createElement('button');
+    b.className = 't-move'; b.innerHTML = `${LABEL[t]} ${ARROW}`; b.title = `Move to ${LABEL[t]}`;
+    b.onclick = e => { e.stopPropagation(); movePhoto(p, t); };
+    moves.appendChild(b);
+  });
+  f.appendChild(moves);
   f.onclick = () => showBig(gList.indexOf(p));
   return f;
 }
@@ -255,18 +291,21 @@ function updateResult(r) {
   Object.assign(result, r || {});
   $('#doneSel').textContent = fmt(result.selected);
   renderStats();
-  $('#gCount').textContent = `${fmt(gList.length)} photos`;
+  showCount();
 }
-// keep the open gallery in step with a photo's fresh entry after a move or a swap: it leaves this
-// gallery, comes into it (at its place in time), or is redrawn
+// keep the open gallery in step with a photo's fresh entry after a move or a swap. A photo that
+// leaves this folder stays where it is, dimmed and marked with its new folder (so nothing else
+// seems to move and Undo is easy), until the gallery is opened again; one that comes in appears at
+// its place in time.
 function place(e) {
   if (!e) return;
   const grid = $('#gGrid'), here = setOf(e) === gSet, i = gList.findIndex(p => p.id === e.id);
-  const fig = grid.querySelector(`figure[data-id="${e.id}"]`);
-  if (i >= 0) gList.splice(i, 1);
-  if (fig) {
-    if (here) fig.remove();
-    else { fig.classList.add('out'); fig.removeAttribute('data-id'); setTimeout(() => fig.remove(), 350); }
+  if (i >= 0) {
+    const entry = here ? e : { ...e, gone: true };
+    gList[i] = entry;
+    const fig = grid.querySelector(`figure[data-id="${e.id}"]`);
+    if (fig) { const t = tile(entry); if (here) t.classList.add('back'); fig.replaceWith(t); }
+    return;
   }
   if (!here) return;
   let k = gList.findIndex(p => p.t > e.t || (p.t === e.t && p.name > e.name));
@@ -283,16 +322,17 @@ function reopen(anchorId, preview) {            // the big view again, on this p
   const i = gList.findIndex(p => p.id === anchorId);
   showBig(i >= 0 ? i : Math.min(gIdx, gList.length - 1), i >= 0 ? preview : undefined);
 }
-async function movePhoto(p) {
+async function movePhoto(p, to) {
   if (!p || p.busy) return;
-  const from = setOf(p), to = other(from), at = gList.indexOf(p);
+  const from = setOf(p), at = gList.indexOf(p);
+  if (!to || to === from) return;
   p.busy = true;
   try {
     const r = await api('/api/move', { id: p.id, to });
     fCache.clear();
-    place(r.photo || { ...p, sel: to === 'selected' });
+    place(r.photo || { ...p, tier: to, sel: to !== 'not_selected' });
     updateResult(r.result);
-    if (bigOpen()) { if (gList.length) showBig(Math.min(at, gList.length - 1)); else closeBig(); }
+    if (bigOpen()) reopen(p.id, r.photo);
     toast(`${p.name} moved to ${LABEL[to]}.`, 8000, { label: 'Undo', fn: () => undoMove(p, from) });
   } catch (e) { toast(e.message, 8000); }
   p.busy = false;
@@ -301,7 +341,7 @@ async function undoMove(p, from) {
   try {
     const r = await api('/api/move', { id: p.id, to: from });
     fCache.clear();
-    place(r.photo || { ...p, sel: from === 'selected' });
+    place(r.photo || { ...p, tier: from, sel: from !== 'not_selected' });
     updateResult(r.result);
     if (bigOpen()) reopen(strip.anchor && strip.anchor.id, strip.cur && strip.cur.id === p.id ? r.photo : strip.cur && strip.cur.id);
     toast(`${p.name} is back in ${LABEL[from]}.`, 3000);
@@ -355,14 +395,17 @@ function frameLabels(f) {
   strip.cur = f;
   $('#lbName').textContent = f.name;
   $('#lbReason').textContent = f.reason || ''; $('#lbReason').title = f.reason || '';
-  $('#lbMove').innerHTML = `Move to ${LABEL[other(setOf(f))]} ${ARROW}<kbd>M</kbd>`;
+  $('#lbMoves').querySelectorAll('button').forEach(b => {
+    const here = b.dataset.to === setOf(f);
+    b.classList.toggle('on', here); b.disabled = here;
+  });
   const k = keptFor(f), use = $('#lbUse');
   use.hidden = !k;
   if (k) use.title = `Put ${f.name} into Selected in place of ${k.name} (Enter)`;
   markCur();
 }
 function keptFor(f) {                        // the frame in Selected that `f` would replace
-  if (!f || setOf(f) === 'selected' || !strip.list.length) return null;
+  if (!f || setOf(f) !== 'not_selected' || !strip.list.length) return null;
   const shot = strip.list.slice(0, strip.shotN), at = strip.list.findIndex(x => x.id === f.id);
   if (at < 0) return null;
   let best = null;
@@ -377,18 +420,22 @@ function renderStrip() {
   el.innerHTML = '';
   if (!show) return;
   const near = L.length - strip.shotN, n = strip.shotN;
-  $('#lfTitle').innerHTML = (n > 1 ? `<b>${fmt(n)}</b> frames of this shot` : 'Only frame of this shot')
-    + (near ? ` &middot; ${fmt(near)} more from this moment` : '');
+  const inShot = L.slice(0, n), count = t => inShot.filter(f => setOf(f) === t).length;
+  const where = TIERS.filter(t => count(t)).map(t => `${fmt(count(t))} in ${LABEL[t]}`).join(', ');
+  $('#lfTitle').innerHTML = (n > 1 ? `<b>${fmt(n)}</b> frames of this shot: ${where}` : 'Only frame of this shot')
+    + (near ? ` &middot; then ${fmt(near)} more from this moment` : '');
   const frag = document.createDocumentFragment();
   L.forEach((f, k) => {
-    if (k === n && k > 0) frag.appendChild(Object.assign(document.createElement('i'), { className: 'lf-gap' }));
+    if (k === n && k > 0) frag.appendChild(Object.assign(document.createElement('i'),
+      { className: 'lf-gap', title: 'Other photos of the same moment (different shots)', innerHTML: '<span>moment</span>' }));
     const b = document.createElement('button'), img = new Image();
-    b.className = 'lf' + (f.sel ? ' sel' : ''); b.dataset.id = f.id;
-    const second = !f.near && !f.sel && f.rank === 2;
-    b.title = f.name + (f.sel ? ' · in Selected' : '') + (second ? " · KeepSake's next best frame" : '') + (f.near ? ' · same moment' : '');
+    const tier = setOf(f);
+    b.className = 'lf ' + tier; b.dataset.id = f.id;
+    const second = !f.near && tier === 'not_selected' && f.rank === 2;
+    b.title = `${f.name} · in ${LABEL[tier]}` + (second ? " · KeepSake's next best frame" : '') + (f.near ? ' · same moment, another shot' : '');
     img.decoding = 'async'; img.alt = ''; img.onload = () => img.classList.add('in'); img.src = f.u;
     b.appendChild(img);
-    if (f.sel) b.insertAdjacentHTML('beforeend', `<span class="lf-in">${CHECK}</span>`);
+    if (tier !== 'not_selected') b.insertAdjacentHTML('beforeend', `<span class="lf-t ${tier}">${LABEL[tier]}</span>`);
     else if (second) b.insertAdjacentHTML('beforeend', '<span class="lf-2">2nd</span>');
     b.onclick = e => { e.stopPropagation(); previewFrame(f); };
     frag.appendChild(b);
@@ -431,9 +478,7 @@ function afterSwap(r) {                      // returns the photo the big view s
   const a = strip.anchor && strip.anchor.id;
   place(r.selected); place(r.not_selected);
   updateResult(r.result);
-  if (a === r.not_selected.id && gSet === 'selected') return r.selected.id;     // its place now holds the chosen frame
-  if (a === r.selected.id && gSet === 'not_selected') return r.not_selected.id;
-  return a;
+  return a;                                   // both stay in the gallery: the one that left, dimmed
 }
 async function undoSwap(r) {
   if (swapping) return;
@@ -445,9 +490,10 @@ async function undoSwap(r) {
   } catch (e) { toast(e.message, 8000); }
   swapping = false;
 }
-async function moveFrame(f) {                // Move on a frame from the strip (not the gallery's own photo)
+async function moveFrame(f, to) {            // Move on a frame from the strip (not the gallery's own photo)
   if (!f || f.busy) return;
-  const to = other(setOf(f)), a = strip.anchor && strip.anchor.id;
+  const from = setOf(f), a = strip.anchor && strip.anchor.id;
+  if (!to || to === from) return;
   f.busy = true;
   try {
     const r = await api('/api/move', { id: f.id, to });
@@ -455,17 +501,18 @@ async function moveFrame(f) {                // Move on a frame from the strip (
     place(r.photo);
     updateResult(r.result);
     reopen(a, r.photo || f.id);
-    toast(`${f.name} moved to ${LABEL[to]}.`, 8000, { label: 'Undo', fn: () => undoMove(r.photo || f, other(to)) });
+    toast(`${f.name} moved to ${LABEL[to]}.`, 8000, { label: 'Undo', fn: () => undoMove(r.photo || f, from) });
   } catch (e) { toast(e.message, 8000); }
   f.busy = false;
 }
-const moveShown = () => (strip.cur && strip.anchor && strip.cur.id !== strip.anchor.id ? moveFrame(strip.cur) : movePhoto(gList[gIdx]));
+const moveShown = to => (strip.cur && strip.anchor && strip.cur.id !== strip.anchor.id ? moveFrame(strip.cur, to) : movePhoto(gList[gIdx], to));
+const shownTier = () => setOf(strip.cur || gList[gIdx] || {});
 
 const closeBig = () => ($('#lightbox').hidden = true);
 $('#lbPrev').onclick = e => { e.stopPropagation(); showBig(gIdx - 1); };
 $('#lbNext').onclick = e => { e.stopPropagation(); showBig(gIdx + 1); };
 $('#lbClose').onclick = e => { e.stopPropagation(); closeBig(); };
-$('#lbMove').onclick = e => { e.stopPropagation(); moveShown(); };
+$('#lbMoves').onclick = e => { e.stopPropagation(); const b = e.target.closest('button'); if (b && !b.disabled) moveShown(b.dataset.to); };
 $('#lbUse').onclick = e => { e.stopPropagation(); useFrame(); };
 $('#lfStrip').addEventListener('wheel', e => {      // a mouse wheel scrolls the strip sideways
   const el = e.currentTarget;
@@ -474,7 +521,7 @@ $('#lfStrip').addEventListener('wheel', e => {      // a mouse wheel scrolls the
 (() => {                                   // swipe: drag left = next, right = previous; a plain click outside closes
   const lb = $('#lightbox'), img = lb.querySelector('img');
   let x0 = null, y0 = 0;
-  lb.addEventListener('pointerdown', e => { if (e.target.closest('.lb-btn, .lb-frames')) return; x0 = e.clientX; y0 = e.clientY; img.classList.add('drag'); });
+  lb.addEventListener('pointerdown', e => { if (e.target.closest('.lb-btn, .lb-frames, .lb-moves')) return; x0 = e.clientX; y0 = e.clientY; img.classList.add('drag'); });
   lb.addEventListener('pointermove', e => { if (x0 === null) return; const m = e.clientX - x0; img.style.transform = `translateX(${m}px) rotate(${m / 80}deg)`; });
   const end = e => {
     if (x0 === null) return;
@@ -500,7 +547,8 @@ addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft') showBig(gIdx - 1);
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); stepFrame(e.key === 'ArrowDown' ? 1 : -1); }
   if (e.key === 'Enter' && !e.repeat) { e.preventDefault(); useFrame(); }
-  if ((e.key === 'm' || e.key === 'M') && !e.repeat) moveShown();
+  if (['1', '2', '3'].includes(e.key) && !e.repeat) moveShown(TIERS[+e.key - 1]);
+  if ((e.key === 'm' || e.key === 'M') && !e.repeat) moveShown(shownTier() === 'not_selected' ? 'selected' : 'not_selected');
 });
 
 boot();

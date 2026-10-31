@@ -94,7 +94,10 @@
     <span class="rule" id="brandRule" hidden></span>
     <span class="ks">KeepSake</span>
   </div>
-  <div class="status" id="status"><i></i><span id="statusText">Offline · everything stays on this laptop</span></div>
+  <div class="top-right">
+    <button class="sound" id="soundBtn" aria-label="Sound on or off"></button>
+    <div class="status" id="status"><i></i><span id="statusText">Offline · everything stays on this laptop</span></div>
+  </div>
 </header>
 
 <div class="intro-mark" id="introMark" aria-hidden="true">
@@ -132,7 +135,7 @@
           <div class="seg" id="keepSeg">
             <button data-keep="0.07">Fewer</button><button data-keep="studio">Studio style</button><button data-keep="wide">Wider</button><button data-keep="shortlist" class="on">Shortlist</button>
           </div>
-          <span class="s-note" id="keepNote">about 4 in 10, holding 9 in 10 of your moments</span>
+          <span class="s-note" id="keepNote">Selected: your usual share · Maybe: the rest, together 9 in 10 of your picks</span>
         </div>
         <div class="s-row">
           <span class="s-label">Save to</span>
@@ -181,6 +184,7 @@
       <div class="actions">
         <button class="btn gold" data-open="selected">Open Selected</button>
         <button class="btn line" data-gallery="selected">View photos</button>
+        <button class="btn line" data-open="maybe" id="openMaybe" hidden>Open Maybe</button>
         <button class="btn line" data-open="not_selected" id="openNot">Open Not selected</button>
       </div>
       <div class="stats" id="stats"></div>
@@ -193,7 +197,7 @@
   <div class="g-head">
     <h3 id="gTitle">Selected</h3><span class="g-count" id="gCount"></span>
     <span class="g-note" id="gNote">Still copying · you can move photos when it finishes</span>
-    <div class="seg" id="gSeg"><button data-set="selected" class="on">Selected</button><button data-set="not_selected">Not selected</button></div>
+    <div class="seg" id="gSeg"><button data-set="selected" class="on">Selected</button><button data-set="maybe">Maybe</button><button data-set="not_selected">Not selected</button></div>
     <button class="link close" id="gClose">Close</button>
   </div>
   <div class="g-grid" id="gGrid"></div>
@@ -208,11 +212,13 @@
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
   <div class="lb-info"><span class="lb-count" id="lbCount"></span><span class="lb-name" id="lbName"></span><span class="lb-reason" id="lbReason"></span></div>
   <div class="lb-frames" id="lbFrames" hidden>
-    <div class="lf-head"><span id="lfTitle"></span><span class="lf-keys"><kbd>&uarr;</kbd><kbd>&darr;</kbd> frames &nbsp;<kbd>Enter</kbd> use frame</span></div>
+    <div class="lf-head"><span id="lfTitle"></span><span class="lf-keys"><kbd>&uarr;</kbd><kbd>&darr;</kbd> frames &nbsp;<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> move &nbsp;<kbd>Enter</kbd> swap in</span></div>
     <div class="lf-strip" id="lfStrip"></div>
   </div>
-  <button class="lb-btn lb-use" id="lbUse" hidden>Use this frame <kbd>Enter</kbd></button>
-  <button class="lb-btn lb-move" id="lbMove" title="Move this photo to the other folder (M)"></button>
+  <button class="lb-btn lb-use" id="lbUse" hidden>Swap in this frame <kbd>Enter</kbd></button>
+  <div class="lb-moves" id="lbMoves" role="group" aria-label="Move this photo to">
+    <span>Move this frame to</span><button data-to="selected">Selected<kbd>1</kbd></button><button data-to="maybe">Maybe<kbd>2</kbd></button><button data-to="not_selected">Not selected<kbd>3</kbd></button>
+  </div>
 </div>
 <div class="toast" id="toast" hidden></div>
 

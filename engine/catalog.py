@@ -130,7 +130,8 @@ CREATE TABLE IF NOT EXISTS cull (
     similar   INTEGER,                -- the kept photo of the same moment, for 'similar' removals
     changed   INTEGER NOT NULL DEFAULT 0,  -- 1 = moved by a person on the review page
     shot      INTEGER,                -- near-identical frames share this (the shot's first photo id)
-    frame_rank INTEGER                -- KeepSake's order of the shot's frames: 1 = its best frame
+    frame_rank INTEGER,               -- KeepSake's order of the shot's frames: 1 = its best frame
+    best      INTEGER NOT NULL DEFAULT 1   -- Selected photos: 1 = the Selected folder, 0 = Maybe
 );
 
 -- The studio's own choices, when known (from ks match): 1 = selected, 0 = not selected
@@ -195,7 +196,8 @@ class Catalog:
         """Catalogs made by an older KeepSake get the columns added since (data is kept)."""
         added = {"faces": [("subject", "INTEGER"), ("eyes", "TEXT"), ("lm", "BLOB"), ("emb", "BLOB"),
                            ("person", "INTEGER")],
-                 "cull": [("changed", "INTEGER NOT NULL DEFAULT 0"), ("shot", "INTEGER"), ("frame_rank", "INTEGER")]}
+                 "cull": [("changed", "INTEGER NOT NULL DEFAULT 0"), ("shot", "INTEGER"), ("frame_rank", "INTEGER"),
+                          ("best", "INTEGER NOT NULL DEFAULT 1")]}
         for table, columns in added.items():
             have = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
             for name, kind in columns:
@@ -401,30 +403,40 @@ class Catalog:
             self.db.executemany("INSERT INTO labels (id, selected, source) VALUES (?, ?, ?)", rows)
         return len(rows)
 
-    def save_cull(self, rows: list[tuple], settings: dict, frames: dict | None = None) -> None:
-        """rows: (id, decision, unsure, score, reason, similar); frames: {id: (shot, frame rank)}.
-        Photos a person moved by hand (in the app's gallery) keep that person's choice and its
-        reason: a new cull never overrules them."""
+    def save_cull(self, rows: list[tuple], settings: dict, frames: dict | None = None, best=None) -> None:
+        """rows: (id, decision, unsure, score, reason, similar); frames: {id: (shot, frame rank)};
+        best: the ids of the Selected folder when Selected has two tiers (the other selected photos
+        go to Maybe), None when every selected photo is in Selected. Photos a person moved by hand
+        (in the app's gallery) keep that person's choice and its reason: a new cull never overrules them."""
         import json
         with self.db:
-            by_hand = self.db.execute("SELECT id, decision, reason FROM cull WHERE changed = 1").fetchall()
+            by_hand = self.db.execute("SELECT id, decision, reason, best FROM cull WHERE changed = 1").fetchall()
             self.db.execute("DELETE FROM cull")
             self.db.executemany("INSERT INTO cull (id, decision, unsure, score, reason, similar) "
                                 "VALUES (?, ?, ?, ?, ?, ?)", rows)
             if frames:
                 self.db.executemany("UPDATE cull SET shot = ?, frame_rank = ? WHERE id = ?",
                                     [(int(s), int(r), int(pid)) for pid, (s, r) in frames.items()])
-            self.db.executemany("UPDATE cull SET decision = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",
-                                [(decision, reason or "moved by you", pid) for pid, decision, reason in by_hand])
+            if best is None:
+                self.db.execute("UPDATE cull SET best = (decision = 'selected')")
+            else:
+                self.db.execute("UPDATE cull SET best = 0")
+                self.db.executemany("UPDATE cull SET best = 1 WHERE id = ? AND decision = 'selected'",
+                                    [(int(pid),) for pid in best])
+            self.db.executemany("UPDATE cull SET decision = ?, best = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",
+                                [(decision, int(decision == "selected" and tier != 0), reason or "moved by you", pid)
+                                 for pid, decision, reason, tier in by_hand])
             self.db.execute("INSERT OR REPLACE INTO info (key, value) VALUES ('cull', ?)",
                             (json.dumps(settings),))
 
-    def move(self, photo_ids: list[int], decision: str) -> int:
-        """A person's change: these photos go to Selected ('selected') or Not selected ('removed')."""
+    def move(self, photo_ids: list[int], decision: str, best: bool = True) -> int:
+        """A person's change: these photos go to Selected ('selected'), Maybe ('selected' with
+        best=False) or Not selected ('removed')."""
+        tier = int(decision == "selected" and best)
         with self.db:
             cur = self.db.executemany(
-                "UPDATE cull SET decision = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",
-                [(decision, "moved by you", pid) for pid in photo_ids])
+                "UPDATE cull SET decision = ?, best = ?, unsure = 0, changed = 1, reason = ? WHERE id = ?",
+                [(decision, tier, "moved by you", pid) for pid in photo_ids])
         return cur.rowcount
 
     def labelled_quality(self) -> list[dict]:
