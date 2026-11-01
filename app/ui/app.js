@@ -134,8 +134,38 @@ $('#startBtn').onclick = async () => {
 // ---------- 2. working ----------
 let polling = false, lastThumbs = 0, sorted = false, shownPct = 0;
 const SHORT = { read: 'Reading', quality: 'Sharpness', faces: 'Faces', clip: 'Understanding', groups: 'Moments', choose: 'Choosing', copy: 'Copying' };
+// ---------- "Do you know?": the studio's lines, one after another while it works ----------
+const FACT_MS = 4200;
+let factTimer = null, factIdx = 0;
+function startFacts() {
+  const list = ((home.brand || {}).facts || []).filter(f => typeof f === 'string' && f.trim());
+  $('#facts').hidden = !list.length;
+  if (!list.length || factTimer) return;
+  $('#factDots').innerHTML = list.map(() => '<i></i>').join('');
+  factIdx = 0; showFact(list, true);
+  factTimer = setInterval(() => { factIdx = (factIdx + 1) % list.length; showFact(list); }, FACT_MS);
+}
+function showFact(list, first) {
+  const el = $('#factText');
+  const write = () => {
+    el.textContent = '';
+    list[factIdx].trim().split(/\s+/).forEach((w, k) => {          // the words come in one after another
+      const span = document.createElement('span');
+      span.textContent = w; span.style.animationDelay = `${k * 38}ms`;
+      el.append(span, ' ');
+    });
+    el.classList.remove('out');
+    $('#factDots').querySelectorAll('i').forEach((d, k) => d.classList.toggle('on', k === factIdx));
+  };
+  if (first) return write();
+  el.classList.add('out');                                           // the last one drifts up and away
+  setTimeout(write, 450);
+}
+function stopFacts() { clearInterval(factTimer); factTimer = null; }
+
 function follow(st) {
   show('working');
+  startFacts();
   $('#wkName').textContent = st.name;
   sorted = false; shownPct = 0; $('#steps').innerHTML = '';
   if (!polling) { polling = true; poll(st); }
@@ -177,6 +207,7 @@ async function poll(st) {
     }
     if (st.status === 'running') { setTimeout(() => poll(), 600); return; }
     polling = false;
+    stopFacts();
     if (st.status === 'done') return finish(st);
     toast(st.error || 'Stopped.', 9000);
     show('welcome');
