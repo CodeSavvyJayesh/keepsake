@@ -351,3 +351,28 @@ def test_selected_maybe_and_not_selected(server, tmp_path):
     with Catalog(db) as cat:
         cat.save_cull([(i, "removed", 0, 1, "", None) for i in range(1, 6)], {}, best=set())
         assert cat.db.execute("SELECT decision, best FROM cull WHERE id = 5").fetchone() == ("selected", 0)
+
+
+def test_the_opening_uses_a_wedding_whose_small_copies_are_here(server, tmp_path):
+    """On a second computer the past weddings' catalogs come without their small copies:
+    the opening must still find the one wedding that has them, every time."""
+    import sqlite3
+    app, base, token = server
+    for k, name in enumerate(("a_copied_wedding", "b_copied_wedding", "c_read_here")):
+        shoot = tmp_path / "cache" / name
+        shoot.mkdir(parents=True)
+        con = sqlite3.connect(shoot / "catalog.db")
+        con.execute("CREATE TABLE info (key TEXT, value TEXT)")
+        con.execute("CREATE TABLE photos (id INTEGER, status TEXT)")
+        con.execute("INSERT INTO info VALUES ('root', ?)", (str(tmp_path / f"drive{k}" / name),))
+        con.executemany("INSERT INTO photos VALUES (?, 'done')", [(i,) for i in range(1, 61)])
+        con.commit()
+        con.close()
+    for i in range(1, 61):
+        p = tmp_path / "cache" / "c_read_here" / "thumbs" / "000" / f"{i:06d}.jpg"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\xff\xd8")
+    for _ in range(12):
+        home = call(base, "/api/home", token)
+        assert len(home["recent"]) == 3
+        assert len(home["sample"]) == 48 and all(u.startswith("/photo/c_read_here/") for u in home["sample"])

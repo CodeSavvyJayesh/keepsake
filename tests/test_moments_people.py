@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from engine.catalog import Catalog
 from engine.clip import to_blob
@@ -96,7 +97,8 @@ def test_people_found_and_ranked_by_photos():
     assert found[(999, 0)] == 2
 
 
-def test_groups_command_end_to_end(tmp_path, monkeypatch):
+@pytest.mark.parametrize("copies", [True, False])     # False: a catalog brought from another computer
+def test_groups_command_end_to_end(tmp_path, monkeypatch, copies):
     import groups as script
     from engine import ingest
     root = tmp_path / "Sharma Wedding" / "Raw"
@@ -116,7 +118,7 @@ def test_groups_command_end_to_end(tmp_path, monkeypatch):
         cat.db.execute("INSERT INTO faces (photo_id, n, x, y, w, h, sharp, contrast, lm, emb) "
                        "VALUES (?, 0, 50, 50, 100, 100, 50, 10, ?, ?)",
                        (pid, points.tobytes(), to_blob(near(face_id[pid % 2], 0.02))))
-        for kind in ("analysis", "thumbs"):
+        for kind in ("analysis", "thumbs") if copies else ():
             path = ingest.cache_path(shoot.cache, kind, pid)
             path.parent.mkdir(parents=True, exist_ok=True)
             cv2.imencode(".jpg", np.full((200, 300, 3), 120, np.uint8))[1].tofile(str(path))

@@ -268,3 +268,24 @@ def test_real_fingerprint_model_loads():
     assert reader.recognizer is not None
     (face,) = reader.read(textured())
     assert face["emb"] is not None and len(face["emb"]) == 256
+
+
+def test_faces_review_page_without_the_copies(tmp_path):
+    """A catalog brought from another computer has no copies to cut faces from: the page is still made."""
+    import faces as script
+    from engine import ingest
+    shoot = ingest.shoot_for(tmp_path / "Sharma Wedding" / "Raw", cache_dir=tmp_path / "cache")
+    cat = Catalog(shoot.db)
+    for pid in (1, 2, 3):
+        cat.db.execute("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status) "
+                       "VALUES (?, ?, '', 'jpeg', 1, 1, 'done')", (pid, f"{pid}.jpg"))
+        cat.db.execute("INSERT INTO faces (photo_id, n, x, y, w, h, subject, blink_l, blink_r, eyes) "
+                       "VALUES (?, 0, 50, 50, 100, 100, 1, ?, ?, ?)", (pid, pid / 4, pid / 4, "open"))
+    cat.db.commit()
+    path = ingest.cache_path(shoot.cache, "analysis", 2)          # only photo 2 was read here
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imencode(".jpg", np.full((300, 300, 3), 120, np.uint8))[1].tofile(str(path))
+    page = script.review_page(shoot, cat)
+    cat.close()
+    text = page.read_text(encoding="utf-8")
+    assert "000002_0.jpg" in text and "000001_0.jpg" not in text and "000003_0.jpg" not in text

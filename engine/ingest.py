@@ -78,6 +78,39 @@ def cache_path(cache: Path, kind: str, photo_id: int) -> Path:
     return cache / kind / f"{photo_id // 1000:03d}" / f"{photo_id:06d}.jpg"
 
 
+def copies_here(cache: Path, kind: str) -> set[int]:
+    """Ids of the photos whose copy of this kind ('analysis' or 'thumbs') is on this computer."""
+    out: set[int] = set()
+    try:
+        subs = [d.path for d in os.scandir(cache / kind) if d.is_dir()]
+    except OSError:
+        return out
+    for sub in subs:
+        try:
+            for f in os.scandir(sub):
+                stem, _, ext = f.name.partition(".")
+                if ext.lower() == "jpg" and stem.isdigit():
+                    out.add(int(stem))
+        except OSError:
+            continue
+    return out
+
+
+def reread_missing_copies(shoot: Shoot, catalog) -> int:
+    """Photos read before whose copies are not on this computer (a catalog brought over from
+    another laptop comes without them) are read again, so they can be shown and measured.
+    What was measured stays as it is: only the copies are made again, the choices do not change."""
+    done = [r[0] for r in catalog.db.execute("SELECT id FROM photos WHERE status = 'done'")]
+    if not done:
+        return 0
+    have = copies_here(shoot.cache, "analysis") & copies_here(shoot.cache, "thumbs")
+    lost = [(pid,) for pid in done if pid not in have]
+    if lost:
+        with catalog.db:
+            catalog.db.executemany("UPDATE photos SET status = 'new' WHERE id = ? AND status = 'done'", lost)
+    return len(lost)
+
+
 def is_inside(path: Path, folder: Path) -> bool:
     a = os.path.normcase(os.path.abspath(path))
     b = os.path.normcase(os.path.abspath(folder))

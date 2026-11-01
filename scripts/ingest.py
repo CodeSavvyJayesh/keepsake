@@ -28,7 +28,8 @@ from engine.cli import clean_path  # noqa: E402
 from engine.config import CACHE_DIR, DOCS_DIR, worker_count  # noqa: E402
 from engine.imaging import DECODED, EMBEDDED, RAW_PREVIEW, RAW_RENDER  # noqa: E402
 from engine.ingest import (IngestResult, Shoot, bench, default_workers, duration,  # noqa: E402
-                           ingest, is_inside, save_settings, shoot_files, shoot_for)
+                           ingest, is_inside, reread_missing_copies, save_settings, shoot_files,
+                           shoot_for)
 from engine.scan import scan_photos  # noqa: E402
 
 CACHE_MB_PER_PHOTO = 0.6     # analysis copy + thumbnail, with a margin
@@ -232,6 +233,10 @@ def main() -> int:
         print(f"Catalog: {sync.new:,} new, {sync.changed:,} changed, {sync.unchanged:,} already "
               f"read, {sync.missing:,} no longer on the drive"
               + (f", {sync.back:,} back again" if sync.back else ""))
+        lost = reread_missing_copies(shoot, cat)
+        if lost:
+            print(f"{lost:,} photos were read on another computer (their copies are not on this one): "
+                  f"reading them again. What was measured stays the same.")
         if args.redo:
             cat.redo_all()
         todo = len(cat.pending(args.limit))

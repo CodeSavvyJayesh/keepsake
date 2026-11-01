@@ -212,3 +212,32 @@ def test_full_laptop_disk_stops_the_run(tmp_path):
     assert run.cache_error and run.done == 0
     assert cat.counts()["new"] >= 5
     cat.close()
+
+
+def test_a_catalog_brought_from_another_computer_gets_its_copies_back(tmp_path):
+    """A friend's PC gets the catalog without the copies: those photos are read again (copies
+    made, nothing measured changes); a second run then has nothing to do."""
+    import shutil
+    from engine.ingest import copies_here, reread_missing_copies
+    root = make_shoot(tmp_path)
+    shoot, cat = open_shoot(tmp_path, root)
+    ingest(shoot, cat, workers=0, **QUIET)
+    done = sorted(r[0] for r in cat.db.execute("SELECT id FROM photos WHERE status = 'done'"))
+    assert copies_here(shoot.cache, "analysis") == set(done) == copies_here(shoot.cache, "thumbs")
+    assert reread_missing_copies(shoot, cat) == 0 and len(cat.pending()) == 1      # only the broken one
+
+    before = list(cat.db.execute("SELECT id, path, width, height, taken_s, body FROM photos ORDER BY id"))
+    shutil.rmtree(shoot.cache / "analysis")                  # what robocopy left behind
+    shutil.rmtree(shoot.cache / "thumbs")
+    assert copies_here(shoot.cache, "analysis") == set()
+    assert reread_missing_copies(shoot, cat) == len(done)
+    run = ingest(shoot, cat, workers=0, **QUIET)
+    assert run.done == len(done)
+    for pid in done:
+        assert shoot.analysis_path(pid).exists() and shoot.thumb_path(pid).exists()
+    assert list(cat.db.execute("SELECT id, path, width, height, taken_s, body FROM photos ORDER BY id")) == before
+    assert reread_missing_copies(shoot, cat) == 0
+
+    shoot.thumb_path(done[0]).unlink()                        # one copy short: only that photo again
+    assert reread_missing_copies(shoot, cat) == 1
+    cat.close()

@@ -130,9 +130,11 @@ def review_page(shoot, cat: Catalog, n: int = 36) -> Path:
         cells = []
         for pid, k, x, y, w, h, eyes, smile, down, sel, path in chosen:
             crop_file = folder / f"{pid:06d}_{k}.jpg"
+            source = cache_path(shoot.cache, "analysis", pid)
+            if not crop_file.exists() and not source.exists():
+                continue                  # read on another computer: no copy here to cut from
             if not crop_file.exists():
-                bgr = cv2.imdecode(np.fromfile(str(cache_path(shoot.cache, "analysis", pid)), np.uint8),
-                                   cv2.IMREAD_COLOR)
+                bgr = cv2.imdecode(np.fromfile(str(source), np.uint8), cv2.IMREAD_COLOR)
                 cv2.imencode(".jpg", square_crop(bgr, (x, y, w, h), size=200)[0])[1].tofile(str(crop_file))
             verdict = {1: "studio: picked", 0: "studio: rejected"}.get(sel, "")
             cells.append(f'<figure><img src="faces/{crop_file.name}"><figcaption>eyes closed '

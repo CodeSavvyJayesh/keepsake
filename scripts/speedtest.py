@@ -23,7 +23,7 @@ from engine.catalog import now_text  # noqa: E402
 from engine.clip import BATCH, clip_task  # noqa: E402
 from engine.config import CACHE_DIR, SPEED_FILE, worker_count  # noqa: E402
 from engine.faces import faces_task  # noqa: E402
-from engine.ingest import Runner, cache_path  # noqa: E402
+from engine.ingest import Runner, cache_path, copies_here  # noqa: E402
 from engine.quality import measure_task  # noqa: E402
 
 PHOTOS = 480
@@ -40,12 +40,13 @@ def sample(n: int | None = None) -> tuple[Path, list[int]] | None:
             con.close()
         except sqlite3.Error:
             continue
+        here = copies_here(db.parent, "analysis")          # a catalog from another laptop has none
+        ids = [pid for pid in ids if pid in here]
         if best is None or len(ids) > len(best[1]):
             best = (db.parent, ids)
     if best is None:
         return None
     cache, ids = best
-    ids = [pid for pid in ids if cache_path(cache, "analysis", pid).exists()]
     if len(ids) < n:
         return None
     step = len(ids) / n

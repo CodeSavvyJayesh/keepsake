@@ -61,9 +61,11 @@ def review_page(shoot, cat: Catalog, groups: list[list[int]], selected: dict[int
         imgs = []
         for pid, n, x, y, w, h in rows:
             out = crops / f"p{person}_{pid:06d}_{n}.jpg"
+            source = cache_path(shoot.cache, "analysis", pid)
+            if not out.exists() and not source.exists():
+                continue                  # read on another computer: no copy here to cut from
             if not out.exists():
-                bgr = cv2.imdecode(np.fromfile(str(cache_path(shoot.cache, "analysis", pid)), np.uint8),
-                                   cv2.IMREAD_COLOR)
+                bgr = cv2.imdecode(np.fromfile(str(source), np.uint8), cv2.IMREAD_COLOR)
                 cv2.imencode(".jpg", square_crop(bgr, (x, y, w, h), margin=1.5, size=140)[0])[1].tofile(str(out))
             imgs.append(f'<img src="people/{out.name}">')
         picks = f", in {n_picks:,} of the studio's picks" if any(selected.values()) else ""
