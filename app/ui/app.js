@@ -50,6 +50,7 @@ async function boot() {
   if (b.background) { $('#photoBg').style.backgroundImage = `url("${b.background}")`; document.body.classList.add('has-photo-bg'); }
   if (b.name) { $('#kicker').innerHTML = `${b.name}<span class="sep"></span>Wedding photo culling`; document.title = `KeepSake · ${b.name}`; }
   renderRecent(home.recent || []);
+  $('#kit').hidden = (home.recent || []).length > 0;           // a new computer: no past weddings yet
   scene.setPhotos(home.sample || []);
 
   const st = await api('/api/state').catch(() => ({ status: 'idle' }));
@@ -112,6 +113,19 @@ $('#chooseBtn').onclick = async () => {
   $('#chooseBtn').disabled = true;
   try { const r = await api('/api/choose', { kind: 'photos' }); if (r.path) await useFolder(r.path); } catch (e) { toast(e.message); }
   $('#chooseBtn').disabled = false;
+};
+$('#kitBtn').onclick = async () => {                            // the studio's past weddings and branding
+  $('#kitBtn').disabled = true;
+  try {
+    const r = await api('/api/choose', { kind: 'kit' });
+    if (r.path) {
+      const k = await api('/api/import-kit', { folder: r.path });
+      toast(`Brought over ${k.weddings} past wedding${k.weddings === 1 ? '' : 's'}`
+        + (k.branding ? ' and the studio\u2019s branding' : '') + '. KeepSake now chooses like your studio.', 6000);
+      setTimeout(() => location.reload(), 2200);
+    }
+  } catch (e) { toast(e.message, 7000); }
+  $('#kitBtn').disabled = false;
 };
 $('#pasteForm').onsubmit = e => { e.preventDefault(); useFolder($('#pathInput').value.trim().replace(/^"|"$/g, '')); };
 $('#changeBtn').onclick = () => { $('#setup').hidden = true; $('#chooser').hidden = false; };

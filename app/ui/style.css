@@ -140,6 +140,9 @@ h1 em, h2 em { font-style: italic; color: var(--gold-hi); }
 .recent button { background: none; border: 0; padding: 0; font: inherit; color: var(--muted); cursor: pointer; transition: color .2s; }
 .recent button:hover { color: var(--gold-hi); }
 .recent button.off { opacity: .45; }
+.kit { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 4px; }
+.kit .link { font-size: 13px; }
+.kit-note { font: 400 11.5px var(--sans); color: var(--faint); }
 .recent .dot { margin: 0 10px; color: #3e352d; }
 .recent .more { display: none; }
 .recent.open .more { display: inline; }

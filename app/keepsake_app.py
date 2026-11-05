@@ -632,6 +632,47 @@ def native_folder_dialog(start: str = "") -> str:
     return str(picked[0] if isinstance(picked, (list, tuple)) else picked)
 
 
+class KitError(Exception):
+    """Why a folder could not be used as a KeepSake kit, in plain words."""
+
+
+KIT_FILES = ("catalog.db", "catalog.db-wal", "catalog.db-shm", "features.npz")
+
+
+def import_kit(folder: Path) -> dict:
+    """Bring the studio's learned style to this computer from a KeepSake kit (the KeepSake folder
+    copied from another computer onto a pen drive): each past wedding's catalog with its saved
+    features, any small copies for the opening, and the studio's branding. No photos are needed.
+    A wedding or a branding file already on this computer is never replaced."""
+    data = next((d for d in (folder / "data", folder / "KeepSake" / "data", folder)
+                 if (d / "cache").is_dir() or (d / "branding").is_dir()), None)
+    if data is None:
+        raise KitError("That folder has no KeepSake data in it. Choose the KeepSake folder on the pen drive.")
+    weddings, skipped = 0, 0
+    for db in sorted((data / "cache").glob("*/catalog.db")):
+        dest = CACHE_DIR / db.parent.name
+        if (dest / "catalog.db").exists():
+            skipped += 1
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in KIT_FILES:
+            if (db.parent / name).exists():
+                shutil.copy2(db.parent / name, dest / name)      # same times: the saved features stay valid
+        if (db.parent / "thumbs").is_dir():
+            shutil.copytree(db.parent / "thumbs", dest / "thumbs", dirs_exist_ok=True)
+        weddings += 1
+    branding = 0
+    if (data / "branding").is_dir():
+        BRAND_DIR.mkdir(parents=True, exist_ok=True)
+        for f in sorted((data / "branding").iterdir()):
+            if f.is_file() and not f.name.startswith(".") and not (BRAND_DIR / f.name).exists():
+                shutil.copy2(f, BRAND_DIR / f.name)
+                branding += 1
+    if not weddings and not branding and not skipped:
+        raise KitError("That KeepSake folder has no past weddings or branding to bring over.")
+    return {"ok": True, "weddings": weddings, "already": skipped, "branding": branding}
+
+
 def choose_folder(title: str, start: str = "") -> str:
     """The system's folder dialog (in its own small process, so the server never blocks)."""
     if WINDOW is not None:
@@ -759,8 +800,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"error": "bad request"}, 400)
         path = urlparse(self.path).path
         if path == "/api/choose":
-            title = "Choose the wedding's photo folder" if data.get("kind") != "output" else "Choose where to save"
+            title = {"output": "Choose where to save", "kit": "Choose the KeepSake folder on the pen drive"}.get(
+                data.get("kind"), "Choose the wedding's photo folder")
             return self.json({"path": choose_folder(title, data.get("start", ""))})
+        if path == "/api/import-kit":
+            try:
+                return self.json(import_kit(Path(str(data.get("folder", "")).strip().strip('"'))))
+            except (KitError, OSError) as e:
+                return self.json({"error": str(e)}, 400)
         if path == "/api/check":
             folder = Path(data.get("folder", "").strip().strip('"'))
             ok = bool(data.get("folder")) and folder.is_dir()
