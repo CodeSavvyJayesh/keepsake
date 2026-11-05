@@ -642,7 +642,8 @@ KIT_FILES = ("catalog.db", "catalog.db-wal", "catalog.db-shm", "features.npz")
 def import_kit(folder: Path) -> dict:
     """Bring the studio's learned style to this computer from a KeepSake kit (the KeepSake folder
     copied from another computer onto a pen drive): each past wedding's catalog with its saved
-    features, any small copies for the opening, and the studio's branding. No photos are needed.
+    features, any small copies for the opening, the studio's picks of past weddings (labels: to
+    show how well KeepSake matched them) and the studio's branding. No photos are needed.
     A wedding or a branding file already on this computer is never replaced."""
     data = next((d for d in (folder / "data", folder / "KeepSake" / "data", folder)
                  if (d / "cache").is_dir() or (d / "branding").is_dir()), None)
@@ -661,6 +662,13 @@ def import_kit(folder: Path) -> dict:
         if (db.parent / "thumbs").is_dir():
             shutil.copytree(db.parent / "thumbs", dest / "thumbs", dirs_exist_ok=True)
         weddings += 1
+    labels = 0
+    if (data / "labels").is_dir():
+        (DATA_DIR / "labels").mkdir(parents=True, exist_ok=True)
+        for f in sorted((data / "labels").glob("*.csv")):
+            if not (DATA_DIR / "labels" / f.name).exists():
+                shutil.copy2(f, DATA_DIR / "labels" / f.name)
+                labels += 1
     branding = 0
     if (data / "branding").is_dir():
         BRAND_DIR.mkdir(parents=True, exist_ok=True)
@@ -668,9 +676,9 @@ def import_kit(folder: Path) -> dict:
             if f.is_file() and not f.name.startswith(".") and not (BRAND_DIR / f.name).exists():
                 shutil.copy2(f, BRAND_DIR / f.name)
                 branding += 1
-    if not weddings and not branding and not skipped:
+    if not weddings and not branding and not skipped and not labels:
         raise KitError("That KeepSake folder has no past weddings or branding to bring over.")
-    return {"ok": True, "weddings": weddings, "already": skipped, "branding": branding}
+    return {"ok": True, "weddings": weddings, "already": skipped, "branding": branding, "labels": labels}
 
 
 def choose_folder(title: str, start: str = "") -> str:

@@ -451,10 +451,12 @@ def test_just_view_copies_nothing_and_a_move_only_changes_the_choice(server, tmp
     assert [p.name for p in (out / "Maybe" / "Haldi").iterdir()] == ["b.jpg"]
 
 
-def test_a_new_computer_brings_the_studios_learned_style_from_the_kit(server, tmp_path):
-    """The KeepSake folder from a pen drive: past weddings (catalog, saved features, small copies)
-    and branding come over once; nothing already on this computer is replaced; no photos needed."""
+def test_a_new_computer_brings_the_studios_learned_style_from_the_kit(server, tmp_path, monkeypatch):
+    """The KeepSake folder from a pen drive: past weddings (catalog, saved features, small copies),
+    the studio's picks and branding come over once; nothing already on this computer is replaced;
+    no photos needed."""
     app, base, token = server
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path / "data")
     kit = tmp_path / "PEN DRIVE" / "KeepSake" / "data"
     a, b = kit / "cache" / "wedding_a", kit / "cache" / "wedding_b"
     for d in (a, b, a / "thumbs" / "000", kit / "branding"):
@@ -466,6 +468,8 @@ def test_a_new_computer_brings_the_studios_learned_style_from_the_kit(server, tm
     (b / "catalog.db-wal").write_bytes(b"W")
     (kit / "branding" / "brand.json").write_text('{"name": "From the kit"}', encoding="utf-8")
     (kit / "branding" / "logo.png").write_bytes(b"\x89PNG")
+    (kit / "labels").mkdir()
+    (kit / "labels" / "wedding_c.csv").write_text("path,selected\n", encoding="utf-8")   # a wedding to read here
     here_b = tmp_path / "cache" / "wedding_b"                      # already read on this computer
     here_b.mkdir(parents=True)
     (here_b / "catalog.db").write_bytes(b"mine")
@@ -473,7 +477,8 @@ def test_a_new_computer_brings_the_studios_learned_style_from_the_kit(server, tm
     (tmp_path / "branding" / "brand.json").write_text('{"name": "Mine"}', encoding="utf-8")
 
     r = call(base, "/api/import-kit", token, {"folder": str(tmp_path / "PEN DRIVE")})
-    assert r == {"ok": True, "weddings": 1, "already": 1, "branding": 1}
+    assert r == {"ok": True, "weddings": 1, "already": 1, "branding": 1, "labels": 1}
+    assert (app.DATA_DIR / "labels" / "wedding_c.csv").exists()
     got = tmp_path / "cache" / "wedding_a"
     assert (got / "catalog.db").read_bytes() == b"A" * 100 and (got / "thumbs" / "000" / "000001.jpg").exists()
     assert (got / "features.npz").stat().st_mtime_ns == (a / "features.npz").stat().st_mtime_ns   # stays valid
