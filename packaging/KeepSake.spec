@@ -7,7 +7,7 @@
 # weddings, branding) is never inside the app: it lives in ~/Library/Application Support/KeepSake.
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all
 
 ROOT = Path(SPECPATH).parent
 VERSION = (ROOT / "packaging" / "VERSION").read_text().strip()
@@ -20,7 +20,11 @@ datas = [(str(ROOT / "app" / "ui"), "app/ui"),
          (str(ROOT / "tools" / "models"), "tools/models"),
          (str(ROOT / "tools" / "exiftool"), "tools/exiftool")]
 binaries = []
-hiddenimports = collect_submodules("scripts") + collect_submodules("engine") + ["keepsake_app"]
+# Every step and engine module by name (the app runs steps with `--run <name>`, so nothing imports
+# them directly; listing them is sturdier than asking PyInstaller to discover them)
+hiddenimports = (["scripts", "engine", "keepsake_app"]
+                 + [f"scripts.{p.stem}" for p in sorted((ROOT / "scripts").glob("*.py")) if p.stem != "__init__"]
+                 + [f"engine.{p.stem}" for p in sorted((ROOT / "engine").glob("*.py")) if p.stem != "__init__"])
 for package in ("rawpy", "pillow_heif", "mediapipe", "onnxruntime", "lightgbm", "webview"):
     d, b, h = collect_all(package)
     datas += d

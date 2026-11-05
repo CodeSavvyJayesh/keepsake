@@ -127,7 +127,7 @@ def window_rows(cat: Catalog, shoot: Shoot, n: int):
     clocks, about the wedding's usual pick rate), KeepSake's blind choice (learned only from the
     other weddings) and the studio's choice. Uses the previews on this laptop: no drive needed.
     Kept in data\\judge\\<wedding>\\test_photos.csv, so every run uses the same photos."""
-    from testset import choose_window
+    from scripts.testset import choose_window
     from engine.cull import cull_shoot, labelled_shoots
     test_file = judge.JUDGE_DIR / shoot.name / "test_photos.csv"
     if not test_file.exists():
