@@ -49,7 +49,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["cv2", "tkinter", "matplotlib", "pytest", "IPython"],
+    excludes=["cv2", "tkinter", "pytest", "IPython"],          # MediaPipe needs matplotlib
     noarchive=False,
 )
 pyz = PYZ(a.pure)
