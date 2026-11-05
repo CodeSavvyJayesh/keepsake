@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 
 # --- Folders --------------------------------------------------------------
-ROOT = Path(__file__).resolve().parents[1]      # C:\KeepSake
 FROZEN = bool(getattr(sys, "frozen", False))     # running as the packaged app (PyInstaller)
+# C:\KeepSake; in the packaged app, the folder its files were unpacked to (read only)
+ROOT = Path(getattr(sys, "_MEIPASS", "")) if FROZEN else Path(__file__).resolve().parents[1]
 
 
 def app_data_dir(platform: str = sys.platform, home: Path | None = None,
@@ -70,6 +71,16 @@ def exiftool_path() -> str:
     if found:
         return found
     raise FileNotFoundError("ExifTool not found. Run setup.ps1 again.")
+
+
+def script_command(script: str, *args) -> list[str]:
+    """How to start one of KeepSake's steps (scripts/<name>.py) as its own process: with this
+    Python, or, in the packaged app (which has no separate Python), the app itself with
+    `--run <name>` (app/keepsake_main.py)."""
+    name = Path(script).stem
+    if FROZEN:
+        return [sys.executable, "--run", name, *(str(a) for a in args)]
+    return [sys.executable, str(ROOT / "scripts" / f"{name}.py"), *(str(a) for a in args)]
 
 
 SPEED_FILE = DATA_DIR / "speed.json"            # ks speedtest: the best worker counts for this laptop

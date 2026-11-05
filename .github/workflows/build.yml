@@ -1,27 +1,28 @@
-# KeepSake: test on Windows and Mac, then build the engine as a Mac installer (.dmg).
+# KeepSake: test on Windows and Mac, then build the Mac app (KeepSake.dmg) and try it.
 #
-# Runs by itself when this file or requirements.txt changes, and any time from GitHub:
-# Actions tab -> "Build and test" -> Run workflow. (Not on every push: Mac build minutes
-# count 10x against the free GitHub allowance for private repos.)
-# The .dmg is under the run's "Artifacts" for 14 days.
+# Runs by itself when the app's code changes on main or a mac-* branch, and any time from
+# GitHub: Actions tab -> "Build and test" -> Run workflow. Mac minutes cost about 10x Linux
+# minutes against the free allowance of a private repository.
+# Under the run's "Artifacts": KeepSake.dmg (5 days), and the Mac checks with a screenshot of
+# the app's window (14 days). Only made-up sample photos are used here, never a client's.
 name: Build and test
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "mac-*"]
     paths:
       - ".github/workflows/build.yml"
       - "requirements.txt"
+      - "packaging/**"
+      - "app/**"
+      - "engine/**"
+      - "scripts/**"
 
 jobs:
-  test:
-    name: Tests on ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  test-windows:
+    name: Tests on Windows
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,53 +31,143 @@ jobs:
           cache: pip
       - name: Install libraries
         run: python -m pip install -r requirements.txt
+      - name: Data folder on the same drive as the test photos
+        shell: bash
+        run: echo "KEEPSAKE_DATA=$(python -c 'import os, tempfile; print(os.path.join(tempfile.gettempdir(), "ks-data"))')" >> "$GITHUB_ENV"
       - name: Run the tests
         run: python -m pytest
 
-  mac-dmg:
-    name: Mac installer (.dmg)
-    needs: test
-    runs-on: macos-latest
+  test-mac:
+    name: Tests on Mac
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install libraries and PyInstaller
-        run: python -m pip install -r requirements.txt pyinstaller
+      - name: OpenMP for LightGBM
+        run: brew install libomp
+      - name: Install the Mac app's libraries (same versions as the laptop)
+        run: python -m pip install -r packaging/requirements-mac.txt
+      - name: Data folder for the tests
+        run: echo "KEEPSAKE_DATA=$RUNNER_TEMP/ks-data" >> "$GITHUB_ENV"
+      - name: Run the tests
+        run: python -m pytest
 
-      - name: Build the engine as one app folder
-        run: >
-          pyinstaller --noconfirm --clean --onedir --name keepsake-ingest --paths .
-          --collect-all rawpy --collect-all pillow_heif --exclude-module cv2
-          scripts/ingest.py
+  mac-app:
+    name: Mac app (KeepSake.dmg)
+    needs: test-mac
+    runs-on: macos-14
+    env:
+      KEEPSAKE_DATA: ${{ github.workspace }}/../ks-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: OpenMP for LightGBM
+        run: brew install libomp
+      - name: Install the libraries and PyInstaller
+        run: python -m pip install -r packaging/requirements-mac.txt
 
-      - name: Check the built app loads every library
-        run: dist/keepsake-ingest/keepsake-ingest --selfcheck
+      - name: AI models (must be the exact files the laptop uses)
+        run: python scripts/models.py
 
-      - name: Make the .dmg
+      - name: ExifTool for Mac
         run: |
+          VER=$(curl -fsSL https://exiftool.org/ver.txt | tr -d '[:space:]')
+          curl -fsSL -o "$RUNNER_TEMP/et.tgz" "https://exiftool.org/Image-ExifTool-$VER.tar.gz" \
+            || curl -fsSL -A Wget -o "$RUNNER_TEMP/et.tgz" \
+                 "https://sourceforge.net/projects/exiftool/files/Image-ExifTool-$VER.tar.gz/download"
+          tar -xzf "$RUNNER_TEMP/et.tgz" -C "$RUNNER_TEMP"
+          mkdir -p tools/exiftool
+          cp -R "$RUNNER_TEMP/Image-ExifTool-$VER/exiftool" "$RUNNER_TEMP/Image-ExifTool-$VER/lib" tools/exiftool/
+          chmod +x tools/exiftool/exiftool
+          tools/exiftool/exiftool -ver
+
+      - name: Self-check from the code
+        run: python scripts/selfcheck.py
+
+      - name: Build KeepSake.app
+        run: pyinstaller --noconfirm --clean packaging/KeepSake.spec
+
+      - name: Make KeepSake.dmg (drag KeepSake to Applications)
+        run: |
+          mkdir -p "$RUNNER_TEMP/dmg"
+          cp -R dist/KeepSake.app "$RUNNER_TEMP/dmg/"
+          ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
           # hdiutil sometimes reports "Resource busy" on GitHub's Macs: try up to 3 times
           for attempt in 1 2 3; do
-            hdiutil create -volname KeepSake -srcfolder dist/keepsake-ingest -ov -format UDZO \
-              dist/KeepSake-engine-mac.dmg && break
+            hdiutil create -volname KeepSake -srcfolder "$RUNNER_TEMP/dmg" -ov -format UDZO dist/KeepSake.dmg && break
             sleep 10
           done
-          test -f dist/KeepSake-engine-mac.dmg
+          test -f dist/KeepSake.dmg
+          du -sh dist/KeepSake.app dist/KeepSake.dmg | tee sizes.txt
 
-      - name: Ingest a sample shoot with the app inside the .dmg
+      - name: The app from the .dmg checks itself
         run: |
-          python scripts/make_sample_shoot.py "$RUNNER_TEMP/Sample Wedding/Raw"
-          hdiutil attach dist/KeepSake-engine-mac.dmg -mountpoint "$RUNNER_TEMP/dmg" -nobrowse
-          KEEPSAKE_DATA="$RUNNER_TEMP/keepsake-data" "$RUNNER_TEMP/dmg/keepsake-ingest" \
-            "$RUNNER_TEMP/Sample Wedding/Raw" --workers 2 | tr '\r' '\n' | tee ingest.txt
-          hdiutil detach "$RUNNER_TEMP/dmg"
-          grep -q "done 29, failed 1" ingest.txt
-          echo "Packaged app ingested the sample shoot correctly."
+          mkdir -p checks
+          hdiutil attach dist/KeepSake.dmg -mountpoint "$RUNNER_TEMP/mnt" -nobrowse
+          cp -R "$RUNNER_TEMP/mnt/KeepSake.app" "$RUNNER_TEMP/KeepSake.app"
+          hdiutil detach "$RUNNER_TEMP/mnt"
+          "$RUNNER_TEMP/KeepSake.app/Contents/MacOS/KeepSake" --run selfcheck 2>&1 | tee checks/selfcheck.txt
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: The app culls a sample wedding (read, choose, copy)
+        run: |
+          BIN="$RUNNER_TEMP/KeepSake.app/Contents/MacOS/KeepSake"
+          SHOOT="$RUNNER_TEMP/Sample Wedding/Raw"
+          python scripts/make_sample_shoot.py "$SHOOT"
+          "$BIN" --run prepare "$SHOOT" 2>&1 | tr '\r' '\n' > checks/prepare.txt; echo "prepare: ${PIPESTATUS[0]}"
+          tail -30 checks/prepare.txt
+          "$BIN" --run cull "$SHOOT" --shortlist 2>&1 | tee checks/cull.txt
+          "$BIN" --run apply "$SHOOT" "$RUNNER_TEMP/Output/Sample Wedding" 2>&1 | tr '\r' '\n' | tee checks/apply.txt
+          ls -R "$RUNNER_TEMP/Output" | head -30 | tee checks/output.txt
+          if grep -l "Traceback" checks/*.txt; then echo "A step crashed (see above)"; exit 1; fi
+          test -d "$RUNNER_TEMP/Output/Sample Wedding/Selected"
+
+      - name: Open the app's window and take screenshots
+        if: always()
+        env:
+          KEEPSAKE_APP_PORT: "8765"
+        run: |
+          "$RUNNER_TEMP/KeepSake.app/Contents/MacOS/KeepSake" > checks/window.txt 2>&1 &
+          sleep 30
+          screencapture -x checks/window-1.png || echo "screencapture failed"
+          TOKEN=$(grep -o 't=[A-Za-z0-9_-]*' checks/window.txt | head -1 | cut -c3-)
+          curl -s -o /dev/null -w "page: %{http_code}\n" "http://127.0.0.1:8765/?t=$TOKEN" | tee -a checks/window.txt
+          curl -s -H "X-KeepSake: $TOKEN" "http://127.0.0.1:8765/api/home" | head -c 600 | tee -a checks/window.txt; echo
+          # The app's own Start (Just view): its steps run as copies of the app, as for the studio
+          python -c "import json, sys; print(json.dumps({'folder': sys.argv[1], 'keep': 'shortlist', 'copy': False}))" \
+            "$RUNNER_TEMP/Sample Wedding/Raw" > start.json
+          curl -s -X POST -H "X-KeepSake: $TOKEN" -H "Content-Type: application/json" --data @start.json \
+            "http://127.0.0.1:8765/api/start" > /dev/null
+          for i in $(seq 1 80); do
+            curl -s -H "X-KeepSake: $TOKEN" "http://127.0.0.1:8765/api/state" > state.json
+            STATUS=$(python -c "import json; print(json.load(open('state.json'))['status'])")
+            [ "$STATUS" != "running" ] && break
+            sleep 3
+          done
+          python -c "import json; s = json.load(open('state.json')); print('Start in the app:', s['status'], s.get('error', ''), {k: s['result'].get(k) for k in ('selected', 'maybe', 'not_selected', 'copied')})" | tee -a checks/window.txt
+          sleep 5
+          screencapture -x checks/window-2.png || echo "screencapture failed"
+          kill %1 || true
+          cat checks/window.txt
+          test "$STATUS" = "done"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: KeepSake-mac-checks
+          path: |
+            checks/
+            sizes.txt
+          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         with:
-          name: KeepSake-engine-mac
-          path: dist/KeepSake-engine-mac.dmg
-          retention-days: 14
+          name: KeepSake-dmg
+          path: dist/KeepSake.dmg
+          retention-days: 5

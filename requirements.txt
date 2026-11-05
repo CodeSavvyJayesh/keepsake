@@ -11,3 +11,4 @@ lightgbm>=4.3        # Phase 3: the learned model (gradient-boosted trees)
 psutil>=5.9          # CPU, memory and disk info
 tqdm>=4.66           # progress bars
 pytest>=8.0          # automatic tests
+pywebview>=5.3,<7; sys_platform == "darwin"   # the Mac app's own window (WebKit)

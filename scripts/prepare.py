@@ -28,10 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.catalog import now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, script_command  # noqa: E402
 from engine.ingest import duration, shoot_for  # noqa: E402
 
-SCRIPTS = Path(__file__).resolve().parent
 STEPS = ["ingest", "quality", "faces", "clip", "groups"]
 NOT_NAMES = {"n", "and", "weds", "wedding", "raw", "image", "images", "s", "selected", "select", "photos"}
 
@@ -84,7 +83,7 @@ def prepared_elsewhere(photos: Path, cache_dir: Path = CACHE_DIR) -> str | None:
 
 
 def run(script: str, args: list[Path], log) -> int:
-    cmd = [sys.executable, str(SCRIPTS / f"{script}.py")] + [str(a) for a in args]
+    cmd = script_command(script, *args)
     log.write("\n$ ks " + script + " " + " ".join(f'"{a}"' for a in args) + "\n")
     log.flush()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

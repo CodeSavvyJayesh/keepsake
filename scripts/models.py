@@ -33,6 +33,23 @@ MODELS = {   # file name: (address, smallest believable size in bytes)
         "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/"
         "vision_model_quantized.onnx", 50_000_000),
 }
+# The exact files every studio's past weddings were measured with (SHA-256). A different file
+# would measure new weddings differently from the past ones KeepSake learns from, so a download
+# that does not match is refused rather than used.
+SHA256 = {
+    "face_detection_yunet_2023mar.onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "face_landmarker.task": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+    "face_recognition_sface_2021dec.onnx": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+    "clip_vit_b32_vision_int8.onnx": "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+}
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def download(url: str, target: Path, min_bytes: int) -> str:
@@ -89,7 +106,14 @@ def main() -> int:
             if force or not path.exists():
                 print(f"Downloading {name} ...", flush=True)
                 sha = download(url, path, min_bytes)
+                if sha != SHA256[name]:
+                    path.replace(path.with_name(name + ".different"))
+                    raise OSError(f"the file online has changed (SHA-256 {sha[:12]}..., expected "
+                                  f"{SHA256[name][:12]}...): copy tools\\models from a KeepSake laptop instead")
                 (MODELS_DIR / (name + ".sha256")).write_text(sha + "\n", encoding="utf-8")
+            elif file_sha256(path) != SHA256[name]:
+                raise OSError("this file differs from the one KeepSake's past weddings were measured with; "
+                              "run  ks models --force  or copy tools\\models from a KeepSake laptop")
             print(f"  OK    {name:<36} {path.stat().st_size / 1e6:5.1f} MB  {check(name, path)}")
         except Exception as e:  # report each model, keep going
             problems += 1
