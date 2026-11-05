@@ -5,6 +5,7 @@
 # Before building, tools/models must hold the AI models (python scripts/models.py) and
 # tools/exiftool the Mac ExifTool (the workflow downloads it). The studio's own data (past
 # weddings, branding) is never inside the app: it lives in ~/Library/Application Support/KeepSake.
+import importlib.util
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
@@ -31,13 +32,24 @@ for package in ("rawpy", "pillow_heif", "mediapipe", "onnxruntime", "lightgbm", 
     binaries += b
     hiddenimports += h
 
+# OpenCV: its Python loader (cv2/__init__.py) trips over the Mac app's layout ("recursion is
+# detected during loading of cv2"), so the app carries OpenCV's compiled module itself as the
+# top-level cv2, without the loader, and its libraries beside it. KeepSake uses only the
+# compiled functions (FaceDetectorYN, imdecode, ...), never the loader's extras.
+CV2_DIR = Path(importlib.util.find_spec("cv2").origin).parent
+CV2_NATIVE = sorted(CV2_DIR.rglob("cv2*.so"))
+if not CV2_NATIVE:
+    raise SystemExit(f"OpenCV's compiled module was not found in {CV2_DIR}")
+binaries.append((str(CV2_NATIVE[0]), "."))
+binaries += [(str(f), ".dylibs") for f in sorted((CV2_NATIVE[0].parent / ".dylibs").glob("*.dylib"))]
+
 a = Analysis(
     [str(ROOT / "app" / "keepsake_main.py")],
     pathex=[str(ROOT), str(ROOT / "app")],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["tkinter", "matplotlib", "pytest", "IPython"],
+    excludes=["cv2", "tkinter", "matplotlib", "pytest", "IPython"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

@@ -61,7 +61,7 @@ def exiftool_check() -> str:
 def yunet_check() -> str:
     import cv2
     cv2.FaceDetectorYN.create(str(model("face_detection_yunet_2023mar.onnx")), "", (320, 320))
-    return f"OpenCV {cv2.__version__}"
+    return f"OpenCV {getattr(cv2, '__version__', '?')}"
 
 
 def sface_check() -> str:

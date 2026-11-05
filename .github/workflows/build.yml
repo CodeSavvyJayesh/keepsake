@@ -93,6 +93,14 @@ jobs:
       - name: Build KeepSake.app
         run: pyinstaller --noconfirm --clean packaging/KeepSake.spec
 
+      - name: What went into the app (for checking)
+        run: |
+          python -m pip show pyinstaller pyinstaller-hooks-contrib | grep -E "^(Name|Version)"
+          python -c "import cv2, pathlib; d = pathlib.Path(cv2.__file__).parent; print(sorted(str(p.relative_to(d)) for p in d.rglob('*') if p.suffix in ('.so', '.dylib') or p.name.startswith('config'))[:30])"
+          ls -la dist/KeepSake.app/Contents/Frameworks | grep -i -E "cv2|dylibs" || true
+          ls dist/KeepSake.app/Contents/Frameworks/.dylibs 2>/dev/null | head -30 || true
+          otool -L dist/KeepSake.app/Contents/Frameworks/cv2*.so | head -25 || true
+
       - name: Make KeepSake.dmg (drag KeepSake to Applications)
         run: |
           mkdir -p "$RUNNER_TEMP/dmg"
@@ -155,6 +163,12 @@ jobs:
           screencapture -x checks/window-2.png || echo "screencapture failed"
           kill %1 || true
           cat checks/window.txt
+          # small copies of the screenshots in the log too (readable without downloading anything)
+          for f in checks/window-1.png checks/window-2.png; do
+            [ -f "$f" ] || continue
+            sips -Z 1100 -s format jpeg -s formatOptions 55 "$f" --out "${f%.png}.jpg" > /dev/null
+            echo "BEGIN-SHOT $f"; base64 -i "${f%.png}.jpg" | fold -w 120; echo "END-SHOT"
+          done
           test "$STATUS" = "done"
 
       - uses: actions/upload-artifact@v4
