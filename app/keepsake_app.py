@@ -109,6 +109,7 @@ class Job:
         self.error = ""
         self.stop_asked = False
         self.shoot_name = None
+        self.copy = True                # False: just view (nothing is copied; moves only change the catalog)
 
     # state for the window
     def state(self) -> dict:
@@ -124,17 +125,19 @@ class Job:
                 progress = 1.0
             elapsed = (self.finished or time.time()) - self.started if self.started else 0
             return {"status": self.status, "folder": str(self.folder or ""), "output": str(self.output or ""),
-                    "name": self.name, "stage": self.stage, "stages": list(self.stages.values()),
+                    "name": self.name, "stage": self.stage, "stages": list(self.stages.values()), "copy": self.copy,
                     "progress": round(progress, 4), "eta": self.eta, "elapsed": round(elapsed),
                     "elapsed_text": duration(elapsed) if self.started else "",
                     "log": list(self.log)[-12:], "result": self.result, "error": self.error}
 
-    def start(self, folder: Path, output: Path, keep: float | str | None, copy_not_selected: bool) -> None:
+    def start(self, folder: Path, output: Path | None, keep: float | str | None, copy_not_selected: bool,
+              copy: bool = True) -> None:
         with self.lock:
             if self.status == "running":
                 raise RuntimeError("KeepSake is already working on a wedding.")
         self.reset()
-        self.folder, self.output, self.name = folder, output, wedding_name(folder)
+        self.copy = copy
+        self.folder, self.output, self.name = folder, (output if copy else None), wedding_name(folder)
         self.shoot_name = shoot_for(folder).name
         self.status, self.started = "running", time.time()
         self.thread = threading.Thread(target=self.run, args=(keep, copy_not_selected), daemon=True)
@@ -169,6 +172,14 @@ class Job:
             with self.lock:                     # the choice is made: its photos can be viewed while they copy
                 self.result.update(counts(self.shoot_name))
                 self.result["ready"] = True
+            if not self.copy:                   # just view: nothing is copied (run again with copying, later)
+                with self.lock:
+                    for k, _, _ in STAGES:
+                        self.stages[k]["state"] = "done" if k != "copy" else "skipped"
+                    self.result.update({"copied": False, "output": ""})
+                    self.status, self.finished = "done", time.time()
+                    self.result["time"] = duration(self.finished - self.started)
+                return
             self.enter("copy")
             args = ["apply.py", str(self.folder), str(self.output)]
             if not copy_not_selected:
@@ -182,7 +193,7 @@ class Job:
                                     "selected_dir": str(self.output / "Selected"),
                                     "maybe_dir": str(self.output / "Maybe"),
                                     "not_selected_dir": str(self.output / "Not selected"),
-                                    "copied_not_selected": copy_not_selected})
+                                    "copied": True, "copied_not_selected": copy_not_selected})
                 self.result.update(counts(self.shoot_name))      # includes photos moved by hand earlier
                 self.status, self.finished = "done", time.time()
                 self.result["time"] = duration(self.finished - self.started)
@@ -287,6 +298,12 @@ def recent_weddings() -> list[dict]:
             out.append({"name": wedding_name(Path(root)), "folder": root, "photos": n,
                         "ready": Path(root).is_dir()})
     return sorted(out, key=lambda r: r["name"].lower())
+
+
+def has_thumbs(shoot_dir: Path) -> bool:
+    """True when at least one small copy of this wedding is on this computer (a catalog copied
+    from another laptop comes without them)."""
+    return next((shoot_dir / "thumbs").glob("*/*.jpg"), None) is not None
 
 
 def thumbs(shoot: str, which: str, n: int) -> list[str]:
@@ -541,7 +558,8 @@ def move_photo(pid: int, to: str) -> dict:
                             + (f" (about {JOB.eta} left)." if JOB.eta else "."))
         if JOB.status != "done" or not JOB.shoot_name:
             raise MoveError("Finish culling this wedding first.")
-        shoot, root, out = JOB.shoot_name, Path(JOB.folder), Path(JOB.output)
+        shoot, root = JOB.shoot_name, Path(JOB.folder)
+        out = Path(JOB.output) if JOB.copy and JOB.output else None     # None: just viewing, no folders yet
     decision = "removed" if to == "not_selected" else "selected"
     best = int(to == "selected")
     folder = deliver.folder_for(decision, best)
@@ -554,16 +572,17 @@ def move_photo(pid: int, to: str) -> dict:
         if tier_of(now, now_best) != to:
             before = BEFORE_MOVE.setdefault((shoot, pid), (now, now_best, unsure, reason, changed))
             back = tier_of(before[0], before[1]) == to and not before[4]   # Undo: KeepSake's own verdict again
-            earlier = deliver.read_manifest(out).get(path, {})
-            has_copy = bool(earlier.get("copy")) and (out / earlier["copy"]).exists()
-            if folder != deliver.NOT_SELECTED and not has_copy and not root.is_dir():
-                raise MoveError(f"Plug in the photo drive first: this photo is copied from it into {folder}.")
-            job = deliver.Job(pid, folder, before[2] if back else 0, (before[3] or "") if back else "moved by you",
-                              path, folder != deliver.NOT_SELECTED)
-            try:
-                deliver.apply(root, out, [(job, companion)], progress=lambda _line: None)
-            except (deliver.OutputError, OSError) as e:
-                raise MoveError(f"Could not move {Path(path).name}: {e}") from e
+            if out is not None:                 # the folders exist: the copy moves with the photo
+                earlier = deliver.read_manifest(out).get(path, {})
+                has_copy = bool(earlier.get("copy")) and (out / earlier["copy"]).exists()
+                if folder != deliver.NOT_SELECTED and not has_copy and not root.is_dir():
+                    raise MoveError(f"Plug in the photo drive first: this photo is copied from it into {folder}.")
+                job = deliver.Job(pid, folder, before[2] if back else 0, (before[3] or "") if back else "moved by you",
+                                  path, folder != deliver.NOT_SELECTED)
+                try:
+                    deliver.apply(root, out, [(job, companion)], progress=lambda _line: None)
+                except (deliver.OutputError, OSError) as e:
+                    raise MoveError(f"Could not move {Path(path).name}: {e}") from e
             if back:
                 with cat.db:
                     cat.db.execute("UPDATE cull SET decision = ?, best = ?, unsure = ?, reason = ?, changed = 0 "
@@ -685,9 +704,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/home":
             weddings = recent_weddings()
             sample = []
-            if weddings:
-                db = random.choice(catalogs())
-                sample = thumbs(db.parent.name, "any", 48)
+            if weddings:                      # the opening's photos: a wedding whose small copies are here
+                dbs = [db for db in catalogs() if has_thumbs(db.parent)] or catalogs()
+                sample = thumbs(random.choice(dbs).parent.name, "any", 48)
             return self.json({"brand": brand(), "recent": weddings, "sample": sample,
                               "output_root": str(OUTPUT_ROOT), "computer": platform.node()})
         if url.path == "/api/gallery":
@@ -743,11 +762,12 @@ class Handler(BaseHTTPRequestHandler):
             folder = Path(data.get("folder", "").strip().strip('"'))
             if not folder.is_dir():
                 return self.json({"error": "Folder not found. Is the drive connected?"}, 400)
-            output = Path(data.get("output") or OUTPUT_ROOT / wedding_name(folder))
+            copy = data.get("copy", True) is not False          # False: just view, nothing is copied
+            output = Path(data.get("output") or OUTPUT_ROOT / wedding_name(folder)) if copy else None
             keep = data.get("keep")
             keep = keep if keep in ("wide", "shortlist") else float(keep) if keep not in (None, "", "studio") else None
             try:
-                JOB.start(folder, output, keep, bool(data.get("copy_not_selected", True)))
+                JOB.start(folder, output, keep, bool(data.get("copy_not_selected", True)), copy=copy)
             except RuntimeError as e:
                 return self.json({"error": str(e)}, 409)
             return self.json(JOB.state())

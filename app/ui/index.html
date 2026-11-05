@@ -138,11 +138,18 @@
           <span class="s-note" id="keepNote">Selected: your usual share · Maybe: the rest, together 9 in 10 of your picks</span>
         </div>
         <div class="s-row">
+          <span class="s-label">Then</span>
+          <div class="seg" id="afterSeg">
+            <button data-after="view">Just view</button><button data-after="copy" class="on">Copy into folders</button>
+          </div>
+          <span class="s-note" id="afterNote"></span>
+        </div>
+        <div class="s-row" id="outRow">
           <span class="s-label">Save to</span>
           <span class="s-path grow" id="outPath"></span>
           <button class="link" id="outBtn">Change</button>
         </div>
-        <label class="s-row toggle">
+        <label class="s-row toggle" id="copyNotRow">
           <input type="checkbox" id="copyNot"><span class="sw"></span>
           <span class="grow">Also copy the Not selected photos <span class="s-note" id="copyHint"></span></span>
         </label>
@@ -187,10 +194,12 @@
     <div class="foot">
       <div class="actions">
         <button class="btn gold" data-open="selected">Open Selected</button>
-        <button class="btn line" data-gallery="selected">View photos</button>
+        <button class="btn line" data-gallery="selected" id="viewBtn">View photos</button>
         <button class="btn line" data-open="maybe" id="openMaybe" hidden>Open Maybe</button>
         <button class="btn line" data-open="not_selected" id="openNot">Open Not selected</button>
       </div>
+      <p class="done-note" id="doneNote" hidden>Nothing was copied. Move photos between Selected, Maybe and Not selected as you like;
+        to copy them later, cull this wedding again with <b>Copy into folders</b>: your moves are kept.</p>
       <div class="stats" id="stats"></div>
       <button class="link" id="againBtn">Cull another wedding</button>
     </div>

@@ -39,7 +39,8 @@ function show(id) {
 function ready() { document.body.classList.remove('intro'); document.body.classList.add('ready'); }
 
 // ---------- opening: the mandap draws itself, photos are dealt into a ring, the camera drops inside ----------
-const pick = { folder: '', output: '', keep: 'shortlist' };
+const pick = { folder: '', output: '', keep: 'shortlist', after: 'copy' };
+let checked = null;                     // the chosen folder's details (/api/check)
 let home = {};
 
 async function boot() {
@@ -103,7 +104,7 @@ async function useFolder(folder) {
     $('#wName').textContent = c.name; $('#wPath').textContent = folder; $('#wPath').title = folder;
     $('#outPath').textContent = c.output; $('#outPath').title = c.output;
     $('#copyHint').textContent = c.not_selected_gb ? `· about ${c.not_selected_gb} GB, ${c.not_selected_time}` : '· usually 9 in 10 photos, large and slow';
-    $('#setupNote').textContent = (c.prepared ? `Read once before (${fmt(c.photos)} photos), so this run is quicker. ` : '') + `${c.free_gb} GB free where it is saved.`;
+    checked = c; setupNote();
     $('#chooser').hidden = true; $('#setup').hidden = false;
   } catch (e) { toast(e.message); }
 }
@@ -119,6 +120,23 @@ $('#outBtn').onclick = async () => {
   if (r?.path) { pick.output = r.path; $('#outPath').textContent = r.path; }
 };
 const KEEP_NOTE = { '0.07': 'about 7 in 100', studio: 'about 1 in 10, like your studio', wide: '1.5x your studio: catches more of your picks', shortlist: 'Selected: your usual share · Maybe: the rest, together 9 in 10 of your picks' };
+function setupNote() {
+  const c = checked || {};
+  $('#setupNote').textContent = (c.prepared ? `Read once before (${fmt(c.photos)} photos), so this run is quicker. ` : '')
+    + (pick.after === 'view' ? 'Nothing is copied anywhere.' : `${c.free_gb} GB free where it is saved.`);
+}
+// After choosing: copy into folders, or just view (see and move the photos in KeepSake, copy later)
+const AFTER_NOTE = { view: 'See the photos and move them right away · nothing is copied', copy: 'Selected and Maybe go into folders on this computer' };
+function setAfter(v, remember = true) {
+  pick.after = v === 'view' ? 'view' : 'copy';
+  if (remember) try { localStorage.setItem('ks-after', pick.after); } catch (e) { /* the choice just is not remembered */ }
+  $('#afterSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.after === pick.after));
+  $('#afterNote').textContent = AFTER_NOTE[pick.after];
+  $('#outRow').hidden = $('#copyNotRow').hidden = pick.after === 'view';
+  if (checked) setupNote();
+}
+$('#afterSeg').onclick = e => { const b = e.target.closest('button'); if (b) setAfter(b.dataset.after); };
+try { setAfter(localStorage.getItem('ks-after') || 'copy', false); } catch (e) { setAfter('copy', false); }
 $('#keepSeg').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   $('#keepSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
@@ -126,7 +144,7 @@ $('#keepSeg').onclick = e => {
 };
 $('#startBtn').onclick = async () => {
   $('#startBtn').disabled = true;
-  try { follow(await api('/api/start', { folder: pick.folder, output: pick.output, keep: pick.keep, copy_not_selected: $('#copyNot').checked })); }
+  try { follow(await api('/api/start', { folder: pick.folder, output: pick.output, keep: pick.keep, copy_not_selected: $('#copyNot').checked, copy: pick.after !== 'view' })); }
   catch (e) { toast(e.message); }
   $('#startBtn').disabled = false;
 };
@@ -173,7 +191,7 @@ function follow(st) {
 function render(st) {
   const ol = $('#steps');
   if (!ol.children.length) st.stages.forEach(s => ol.insertAdjacentHTML('beforeend', `<li data-key="${s.key}">${SHORT[s.key] || s.label}</li>`));
-  st.stages.forEach(s => { ol.querySelector(`[data-key="${s.key}"]`).className = s.state; });
+  st.stages.forEach(s => { const li = ol.querySelector(`[data-key="${s.key}"]`); li.className = s.state; li.hidden = s.key === 'copy' && st.copy === false; });
   const target = Math.floor(st.progress * 100);
   if (target > shownPct) shownPct = Math.min(target, shownPct + Math.max(1, Math.ceil((target - shownPct) / 2)));
   $('#pct').textContent = shownPct;
@@ -236,12 +254,17 @@ function finish(st, fresh = true) {
   countUp($('#doneSel'), r.selected || 0);
   const total = r.total || (r.selected || 0) + (r.not_selected || 0);
   $('#doneSub').textContent = (r.maybe ? `+ ${fmt(r.maybe)} more in Maybe · ` : '')
-    + `From ${fmt(total)} photos · ${r.time || st.elapsed_text} · saved in ${r.output || st.output}`;
+    + `From ${fmt(total)} photos · ${r.time || st.elapsed_text} · `
+    + (r.copied === false ? 'nothing copied' : `saved in ${r.output || st.output}`);
   renderStats();
 }
 function renderStats() {
   const r = result;
-  $('#openNot').hidden = !(r.copied_not_selected !== false || r.moved);
+  const viewOnly = r.copied === false;                       // just viewed: no folders to open
+  $('#done').querySelectorAll('[data-open]').forEach(b => { if (viewOnly) b.hidden = true; });
+  $('#viewBtn').className = viewOnly ? 'btn gold' : 'btn line';
+  $('#doneNote').hidden = !viewOnly;
+  $('#openNot').hidden = viewOnly || !(r.copied_not_selected !== false || r.moved);
   const pct = (a, b) => `${Math.round(100 * (a || 0) / Math.max(b || 0, 1))}%`;
   const stats = [['Selected', fmt(r.selected)]];
   if (r.maybe) stats.push(['Maybe', fmt(r.maybe)]);
@@ -260,7 +283,8 @@ function renderStats() {
   $('#gSeg').querySelector('[data-set=maybe]').innerHTML = `Maybe <i>${fmt(r.maybe)}</i>`;
   $('#gSeg').querySelector('[data-set=maybe]').hidden = !r.maybe && gSet !== 'maybe';
   $('#gSeg').querySelector('[data-set=not_selected]').innerHTML = `Not selected <i>${fmt(r.not_selected)}</i>`;
-  $('#openMaybe').hidden = !r.maybe;
+  $('#openMaybe').hidden = viewOnly || !r.maybe;
+  $('#done').querySelector('[data-open=selected]').hidden = viewOnly;
 }
 document.querySelectorAll('[data-open]').forEach(b => (b.onclick = () => api('/api/open', { which: b.dataset.open }).catch(e => toast(e.message))));
 $('#againBtn').onclick = async () => {
