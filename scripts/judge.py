@@ -52,13 +52,12 @@ import numpy as np  # noqa: E402
 from engine import judge  # noqa: E402
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.ingest import Shoot, cache_path, duration, shoot_for, slug  # noqa: E402
 from engine.learn import photo_features  # noqa: E402
 from engine.shots import group_shots  # noqa: E402
 
 REPICK_DIR = DATA_DIR / "repick"
-OUTPUT_ROOT = Path("C:/KeepSake Output")
 
 
 def option(name: str, default: str | None = None) -> str | None:

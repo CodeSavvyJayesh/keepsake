@@ -44,14 +44,13 @@ sys.path.insert(0, str(ROOT))
 
 from engine import deliver  # noqa: E402
 from engine.catalog import Catalog  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR, FROZEN, script_command  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, FROZEN, OUTPUT_ROOT, script_command  # noqa: E402
 from engine.config import ROOT as BUNDLE  # noqa: E402  (the packaged app's own files when FROZEN)
 from engine.ingest import cache_path, duration, shoot_for  # noqa: E402
 
 UI_DIR = (BUNDLE / "app" / "ui") if FROZEN else Path(__file__).resolve().parent / "ui"
 SCRIPTS = ROOT / "scripts"
 BRAND_DIR = DATA_DIR / "branding"
-OUTPUT_ROOT = Path("C:/KeepSake Output") if os.name == "nt" else Path.home() / "KeepSake Output"
 PYTHON = sys.executable
 WINDOW = None             # the Mac app's own window (pywebview), once it is open
 

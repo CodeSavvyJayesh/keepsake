@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np  # noqa: E402
 
 from engine.catalog import Catalog, now_text  # noqa: E402
-from engine.config import CACHE_DIR  # noqa: E402
+from engine.config import CACHE_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.cull import labelled_shoots, model_factory, per_event_scale  # noqa: E402
 from engine.ingest import cache_path, duration  # noqa: E402
 from engine.learn import combine, past_wedding  # noqa: E402
@@ -42,7 +42,6 @@ from engine.shots import (CLIP_WEIGHT, FAULT_FRAME_W, FAULT_SHOT_W, centred_clip
                           BEST_BY, SHORTLIST_FAULT_W, SHORTLIST_MAX, SHORTLIST_TARGET, face_faults, frame_penalty, group_shots, shortlist, tiers,
                           one_per_shot, relative_to_shot, train_frame_ranker)
 
-OUTPUT_ROOT = Path("C:/KeepSake Output")
 PREVIEW_MB = 0.3
 
 

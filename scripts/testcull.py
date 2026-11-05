@@ -23,12 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.cull import labelled_shoots  # noqa: E402
 from engine.ingest import shoot_for  # noqa: E402
 
 REPICK_DIR = DATA_DIR / "repick"
-OUTPUT_ROOT = Path("C:/KeepSake Output")
 
 
 def studio_rate(others: list[Path]) -> float:

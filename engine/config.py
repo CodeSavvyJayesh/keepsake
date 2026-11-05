@@ -55,6 +55,9 @@ HEIF_TYPES = frozenset({".heic", ".heif", ".hif"})   # .hif = HEIF from Canon, S
 PHOTO_TYPES = RAW_TYPES | JPEG_TYPES | HEIF_TYPES
 
 # Folders that never contain the studio's photos
+# Where KeepSake saves its folders unless a person chooses another one (never on the photo drive)
+OUTPUT_ROOT = Path("C:/KeepSake Output") if os.name == "nt" else Path.home() / "KeepSake Output"
+
 SKIP_DIRS = frozenset({
     "_culling", "$recycle.bin", "system volume information",
     ".trashes", ".spotlight-v100", ".fseventsd", ".venv", "node_modules",

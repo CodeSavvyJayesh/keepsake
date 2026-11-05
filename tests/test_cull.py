@@ -257,6 +257,8 @@ def test_cull_and_apply_commands(tmp_path, monkeypatch):
         monkeypatch.setattr(script, "shoot_for", lambda r: shoot)
     monkeypatch.setattr(cull_script, "attach_labels", lambda c, r: None)
     monkeypatch.setattr(cull_script, "CACHE_DIR", tmp_path / "cache")
+    import engine.cull
+    monkeypatch.setattr(engine.cull, "lightgbm_available", lambda: False)   # 60 fake photos: too few for LightGBM
     monkeypatch.setattr(sys, "argv", ["cull.py", str(real_root), "--target", "90"])
     assert cull_script.main() == 0
     assert (shoot.cache / "review" / "cull_review.html").exists()

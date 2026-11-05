@@ -24,7 +24,7 @@ import numpy as np  # noqa: E402
 
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import DATA_DIR  # noqa: E402
+from engine.config import DATA_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.deliver import OutputError, check_output, copy_verified  # noqa: E402
 from engine.ingest import shoot_for  # noqa: E402
 from engine.labels import attach_labels  # noqa: E402
@@ -78,7 +78,7 @@ def main() -> int:
     n = int(args[1]) if len(args) > 1 and args[1].isdigit() else 400
     out_arg = next((a for a in args[1:] if not a.isdigit()), None)
     shoot = shoot_for(root)
-    out = clean_path(out_arg) if out_arg else Path("C:/KeepSake Output") / (
+    out = clean_path(out_arg) if out_arg else OUTPUT_ROOT / (
         f"Re-pick test - {root.name}" + (" (small)" if small else ""))
     if not shoot.db.exists():
         print(f'This wedding has not been prepared yet. Run first:  ks prepare "{root}"')
