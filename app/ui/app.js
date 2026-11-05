@@ -34,7 +34,7 @@ function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === id));
   scene.setMode(id);
   $('#status').classList.toggle('busy', id === 'working');
-  $('#statusText').textContent = id === 'working' ? 'Working · everything stays on this laptop' : 'Offline · everything stays on this laptop';
+  $('#statusText').textContent = id === 'working' ? 'Working · everything stays on this computer' : 'Offline · everything stays on this computer';
 }
 function ready() { document.body.classList.remove('intro'); document.body.classList.add('ready'); }
 
@@ -77,7 +77,7 @@ function renderRecent(list) {
   const clean = s => s.replace(/[\uE000-\uF8FF]/g, '').replace(/\s+/g, ' ').trim();
   list = [...list].sort((p, q) => (q.ready - p.ready));            // connected drives first
   const SHOW = 4;
-  box.innerHTML = '<b>On this laptop</b>';
+  box.innerHTML = '<b>On this computer</b>';
   list.forEach((w, k) => {
     const btn = document.createElement('button');
     btn.textContent = clean(w.name); btn.className = (w.ready ? '' : 'off') + (k >= SHOW ? ' more' : '');
