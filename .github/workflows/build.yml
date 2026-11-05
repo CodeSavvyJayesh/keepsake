@@ -126,6 +126,13 @@ jobs:
       - name: The app culls a sample wedding (read, choose, copy)
         run: |
           BIN="$RUNNER_TEMP/KeepSake.app/Contents/MacOS/KeepSake"
+          # a made-up PAST wedding with made-up studio picks, so there is something to learn from
+          PAST="$RUNNER_TEMP/Sample Past Wedding"
+          python scripts/make_sample_shoot.py "$PAST/Raw"
+          mkdir -p "$PAST/Selected"
+          cp "$PAST/Raw/Haldi/"DSC_000[1-8].JPG "$PAST/Raw/Sangeet/DSC_0100.JPG" "$PAST/Selected/"
+          "$BIN" --run prepare "$PAST" 2>&1 | tr '\r' '\n' > checks/prepare-past.txt; echo "prepare past: ${PIPESTATUS[0]}"
+          grep -E "Matched|matched|Selected:" checks/prepare-past.txt | head -5 || true
           SHOOT="$RUNNER_TEMP/Sample Wedding/Raw"
           python scripts/make_sample_shoot.py "$SHOOT"
           "$BIN" --run prepare "$SHOOT" 2>&1 | tr '\r' '\n' > checks/prepare.txt; echo "prepare: ${PIPESTATUS[0]}"

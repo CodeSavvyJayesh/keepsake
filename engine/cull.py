@@ -356,8 +356,9 @@ def cull_shoot(cat: Catalog, name: str, others: list[Path], target: float = TARG
         mode = "other events"
         labelled_events = sorted({e for e, k in zip(my_events, known[mine]) if k})
         if len(labelled_events) < 2:
-            raise RuntimeError("Nothing to learn from yet: KeepSake needs the studio's choices for a past "
-                               "wedding (ks match), or for at least two events of this one.")
+            raise RuntimeError("Nothing to learn from yet: this computer has no past weddings with the "
+                               "studio's choices. Bring them from the KeepSake folder on your pen drive "
+                               "(welcome screen: First time on this computer?), or add a past wedding with ks match.")
         y_me = data.y[mine]
         X_me = data.X[mine]
         trained_on, n_train, n_picks = [name], int(known[mine].sum()), int((y_me == 1).sum())
