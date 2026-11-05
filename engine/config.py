@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 
 # --- Folders --------------------------------------------------------------
-ROOT = Path(__file__).resolve().parents[1]      # C:\KeepSake
 FROZEN = bool(getattr(sys, "frozen", False))     # running as the packaged app (PyInstaller)
+# C:\KeepSake; in the packaged app, the folder its files were unpacked to (read only)
+ROOT = Path(getattr(sys, "_MEIPASS", "")) if FROZEN else Path(__file__).resolve().parents[1]
 
 
 def app_data_dir(platform: str = sys.platform, home: Path | None = None,
@@ -54,6 +55,9 @@ HEIF_TYPES = frozenset({".heic", ".heif", ".hif"})   # .hif = HEIF from Canon, S
 PHOTO_TYPES = RAW_TYPES | JPEG_TYPES | HEIF_TYPES
 
 # Folders that never contain the studio's photos
+# Where KeepSake saves its folders unless a person chooses another one (never on the photo drive)
+OUTPUT_ROOT = Path("C:/KeepSake Output") if os.name == "nt" else Path.home() / "KeepSake Output"
+
 SKIP_DIRS = frozenset({
     "_culling", "$recycle.bin", "system volume information",
     ".trashes", ".spotlight-v100", ".fseventsd", ".venv", "node_modules",
@@ -70,6 +74,16 @@ def exiftool_path() -> str:
     if found:
         return found
     raise FileNotFoundError("ExifTool not found. Run setup.ps1 again.")
+
+
+def script_command(script: str, *args) -> list[str]:
+    """How to start one of KeepSake's steps (scripts/<name>.py) as its own process: with this
+    Python, or, in the packaged app (which has no separate Python), the app itself with
+    `--run <name>` (app/keepsake_main.py)."""
+    name = Path(script).stem
+    if FROZEN:
+        return [sys.executable, "--run", name, *(str(a) for a in args)]
+    return [sys.executable, str(ROOT / "scripts" / f"{name}.py"), *(str(a) for a in args)]
 
 
 SPEED_FILE = DATA_DIR / "speed.json"            # ks speedtest: the best worker counts for this laptop
@@ -107,7 +121,7 @@ def worker_count() -> int:
 # straight out of the file instead of decoding the full 24-45 megapixel image.
 ANALYSIS_PX = 1620
 # A built-in preview smaller than this is not used. 900 lets in DJI drone DNGs (960 x 540
-# preview): rendering their 73 MB RAW instead took 49 s per photo at the Dinesh & Ruchi wedding.
+# preview): rendering their 73 MB RAW instead took 49 s per photo at the Neel & Tara wedding.
 MIN_PREVIEW_PX = 900
 MAX_PREVIEW_BYTES = 4 * 2**20  # a "preview" bigger than this is really a second full photo
 THUMB_PX = 400                 # thumbnails for the photo grid

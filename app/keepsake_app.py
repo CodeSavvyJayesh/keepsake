@@ -2,8 +2,8 @@ r"""KeepSake desktop app: choose a wedding folder, press Start, get Selected and
 
     ks app
 
-Opens KeepSake in its own window (a Microsoft Edge or Google Chrome app window; the default
-browser if neither is found). Everything stays on this laptop: a small web server, reachable only
+Opens KeepSake in its own window: on Windows a Microsoft Edge or Google Chrome app window (the
+default browser if neither is found); in the Mac app its own window (WebKit, via pywebview). Everything stays on this laptop: a small web server, reachable only
 from this laptop (127.0.0.1) and only with a secret key made at every start, shows the interface
 (app/ui) and runs the same steps as the commands:
 
@@ -44,14 +44,15 @@ sys.path.insert(0, str(ROOT))
 
 from engine import deliver  # noqa: E402
 from engine.catalog import Catalog  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, FROZEN, OUTPUT_ROOT, script_command  # noqa: E402
+from engine.config import ROOT as BUNDLE  # noqa: E402  (the packaged app's own files when FROZEN)
 from engine.ingest import cache_path, duration, shoot_for  # noqa: E402
 
-UI_DIR = Path(__file__).resolve().parent / "ui"
+UI_DIR = (BUNDLE / "app" / "ui") if FROZEN else Path(__file__).resolve().parent / "ui"
 SCRIPTS = ROOT / "scripts"
 BRAND_DIR = DATA_DIR / "branding"
-OUTPUT_ROOT = Path("C:/KeepSake Output") if os.name == "nt" else Path.home() / "KeepSake Output"
 PYTHON = sys.executable
+WINDOW = None             # the Mac app's own window (pywebview), once it is open
 
 # The steps the window shows, with their share of the whole run (for the overall progress).
 STAGES = [("read", "Reading the photos", 0.30), ("quality", "Sharpness and light", 0.08),
@@ -212,7 +213,7 @@ class Job:
     def command(self, args: list[str], on_line) -> int:
         if self.stop_asked:
             return 1
-        cmd = [PYTHON, str(SCRIPTS / args[0])] + args[1:]
+        cmd = script_command(args[0], *args[1:]) if FROZEN else [PYTHON, str(SCRIPTS / args[0])] + args[1:]
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                      encoding="utf-8", errors="replace", bufsize=1, creationflags=flags,
@@ -613,8 +614,79 @@ def brand() -> dict:
     return info
 
 
+def native_folder_dialog(start: str = "") -> str:
+    """The Mac's own folder dialog, over KeepSake's window (pywebview runs it on the main thread)."""
+    import webview
+    kind = getattr(getattr(webview, "FileDialog", None), "FOLDER", None)
+    if kind is None:
+        kind = webview.FOLDER_DIALOG
+    near = Path(start) if start else None
+    while near is not None and not near.is_dir():           # the dialog opens where the folder would be
+        near = near.parent if near.parent != near else None
+    try:
+        picked = WINDOW.create_file_dialog(kind, directory=str(near or ""))
+    except Exception:  # noqa: BLE001 - a dialog that cannot open simply picks nothing
+        return ""
+    if not picked:
+        return ""
+    return str(picked[0] if isinstance(picked, (list, tuple)) else picked)
+
+
+class KitError(Exception):
+    """Why a folder could not be used as a KeepSake kit, in plain words."""
+
+
+KIT_FILES = ("catalog.db", "catalog.db-wal", "catalog.db-shm", "features.npz")
+
+
+def import_kit(folder: Path) -> dict:
+    """Bring the studio's learned style to this computer from a KeepSake kit (the KeepSake folder
+    copied from another computer onto a pen drive): each past wedding's catalog with its saved
+    features, any small copies for the opening, the studio's picks of past weddings (labels: to
+    show how well KeepSake matched them) and the studio's branding. No photos are needed.
+    A wedding or a branding file already on this computer is never replaced."""
+    data = next((d for d in (folder / "data", folder / "KeepSake" / "data", folder)
+                 if (d / "cache").is_dir() or (d / "branding").is_dir()), None)
+    if data is None:
+        raise KitError("That folder has no KeepSake data in it. Choose the KeepSake folder on the pen drive.")
+    weddings, skipped = 0, 0
+    for db in sorted((data / "cache").glob("*/catalog.db")):
+        dest = CACHE_DIR / db.parent.name
+        if (dest / "catalog.db").exists():
+            skipped += 1
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in KIT_FILES:
+            if (db.parent / name).exists():
+                shutil.copy2(db.parent / name, dest / name)      # same times: the saved features stay valid
+        if (db.parent / "thumbs").is_dir():
+            shutil.copytree(db.parent / "thumbs", dest / "thumbs", dirs_exist_ok=True)
+        weddings += 1
+    labels = 0
+    if (data / "labels").is_dir():
+        (DATA_DIR / "labels").mkdir(parents=True, exist_ok=True)
+        for f in sorted((data / "labels").glob("*.csv")):
+            if not (DATA_DIR / "labels" / f.name).exists():
+                shutil.copy2(f, DATA_DIR / "labels" / f.name)
+                labels += 1
+    branding = 0
+    if (data / "branding").is_dir():
+        BRAND_DIR.mkdir(parents=True, exist_ok=True)
+        for f in sorted((data / "branding").iterdir()):
+            if f.is_file() and not f.name.startswith(".") and not (BRAND_DIR / f.name).exists():
+                shutil.copy2(f, BRAND_DIR / f.name)
+                branding += 1
+    if not weddings and not branding and not skipped and not labels:
+        raise KitError("That KeepSake folder has no past weddings or branding to bring over.")
+    return {"ok": True, "weddings": weddings, "already": skipped, "branding": branding, "labels": labels}
+
+
 def choose_folder(title: str, start: str = "") -> str:
     """The system's folder dialog (in its own small process, so the server never blocks)."""
+    if WINDOW is not None:
+        return native_folder_dialog(start)
+    if FROZEN:
+        return ""                       # the packaged app has no separate Python: the path can be typed instead
     code = ("import sys, tkinter as tk\nfrom tkinter import filedialog\nr = tk.Tk(); r.withdraw()\n"
             "r.attributes('-topmost', True)\n"
             "p = filedialog.askdirectory(title=sys.argv[1], initialdir=sys.argv[2] or None, mustexist=False)\n"
@@ -736,8 +808,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"error": "bad request"}, 400)
         path = urlparse(self.path).path
         if path == "/api/choose":
-            title = "Choose the wedding's photo folder" if data.get("kind") != "output" else "Choose where to save"
+            title = {"output": "Choose where to save", "kit": "Choose the KeepSake folder on the pen drive"}.get(
+                data.get("kind"), "Choose the wedding's photo folder")
             return self.json({"path": choose_folder(title, data.get("start", ""))})
+        if path == "/api/import-kit":
+            try:
+                return self.json(import_kit(Path(str(data.get("folder", "")).strip().strip('"'))))
+            except (KitError, OSError) as e:
+                return self.json({"error": str(e)}, 400)
         if path == "/api/check":
             folder = Path(data.get("folder", "").strip().strip('"'))
             ok = bool(data.get("folder")) and folder.is_dir()
@@ -834,20 +912,52 @@ def app_window(url: str) -> subprocess.Popen | None:
     return None
 
 
+def native_window(url: str) -> bool:
+    """The Mac app's own window (WebKit, via pywebview): its Dock icon and menu, the system's
+    folder dialog, and its settings kept between runs. Returns when the window is closed; False
+    when pywebview is not installed."""
+    global WINDOW
+    try:
+        import webview
+    except ImportError:
+        return False
+    WINDOW = webview.create_window("KeepSake", url, width=1440, height=900, min_size=(1100, 700),
+                                   background_color="#0b0907", text_select=False)
+    storage = DATA_DIR / "app_window"
+    storage.mkdir(parents=True, exist_ok=True)
+    webview.start(private_mode=False, storage_path=str(storage))
+    return True
+
+
+def finish_then_stop() -> None:
+    while JOB.status == "running":          # the window was closed while working: finish first
+        print("The window was closed; KeepSake finishes the current wedding first...", end="\r")
+        time.sleep(2)
+
+
 def main() -> int:
     server = make_server(int(os.environ.get("KEEPSAKE_APP_PORT", "0")))
     url = f"http://127.0.0.1:{server.server_port}/?t={Handler.token}"
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print("KeepSake is open in its own window.")
     print("Keep this window open while KeepSake works; close the KeepSake window when you are done.")
-    print(f"(If the window did not open, paste this into Edge or Chrome:  {url} )")
+    print(f"(If the window did not open, paste this into Edge or Chrome:  {url} )", flush=True)
+    own_window = sys.platform == "darwin" and (FROZEN or os.environ.get("KEEPSAKE_WINDOW") == "native")
+    if "--no-window" not in sys.argv and own_window:
+        try:
+            if native_window(url):
+                finish_then_stop()
+                server.shutdown()
+                return 0
+        except KeyboardInterrupt:
+            JOB.stop()
+            server.shutdown()
+            return 0
     window = None if "--no-window" in sys.argv else app_window(url)
     try:
         if window is not None:
             window.wait()
-            while JOB.status == "running":          # the window was closed while working: finish first
-                print("The window was closed; KeepSake finishes the current wedding first...", end="\r")
-                time.sleep(2)
+            finish_then_stop()
         else:
             while True:
                 time.sleep(3600)

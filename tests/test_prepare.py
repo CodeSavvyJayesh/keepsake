@@ -11,37 +11,37 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 def test_couple_names_pair_raw_and_selected_folders(tmp_path):
     from prepare import couple_key, pair_weddings
-    assert couple_key("Vaibhav & Preeyam { Jaipur }") == couple_key("Vaibhav & Preeyam Jaipur") == ("vaibhav", "preeyam")
-    assert couple_key("twinkle n jacky") == couple_key("Twinkle & Jacky (Dubai)")
+    assert couple_key("Om & Zoya { Jaipur }") == couple_key("Om & Zoya Jaipur") == ("om", "zoya")
+    assert couple_key("ira n kian") == couple_key("Ira & Kian (Dubai)")
     raw1, raw2, sel = tmp_path / "D" / "All Raw images", tmp_path / "E" / "All Raw images", tmp_path / "E" / "All Selected images"
-    for parent, names in ((raw1, ["Ansh & Anjali  { Bikaner }", "twinkle n jacky", "Tej & Suriya"]),
-                          (raw2, ["Shevaun & Brian Jaisalmer"]),
-                          (sel, ["Ansh & Anjali ( Bikaner )", "Twinkle & Jacky (Dubai)", "Shevaun & Brian", "Soumya & Piyush (Goa)"])):
+    for parent, names in ((raw1, ["Dev & Mira  { Bikaner }", "ira n kian", "Yash & Noor"]),
+                          (raw2, ["Sana & Leo Jaisalmer"]),
+                          (sel, ["Dev & Mira ( Bikaner )", "Ira & Kian (Dubai)", "Sana & Leo", "Isha & Kabir (Goa)"])):
         for n in names:
             (parent / n).mkdir(parents=True)
-    (sel / "._Tej & Suriya").write_bytes(b"mac")             # macOS leftovers are ignored
+    (sel / "._Yash & Noor").write_bytes(b"mac")             # macOS leftovers are ignored
     pairs = {p.name: (s.name if s else None) for p, s in pair_weddings([raw1, raw2], sel)}
-    assert pairs == {"Ansh & Anjali  { Bikaner }": "Ansh & Anjali ( Bikaner )",
-                     "twinkle n jacky": "Twinkle & Jacky (Dubai)",
-                     "Tej & Suriya": None,
-                     "Shevaun & Brian Jaisalmer": "Shevaun & Brian"}
+    assert pairs == {"Dev & Mira  { Bikaner }": "Dev & Mira ( Bikaner )",
+                     "ira n kian": "Ira & Kian (Dubai)",
+                     "Yash & Noor": None,
+                     "Sana & Leo Jaisalmer": "Sana & Leo"}
 
 
 def test_a_wedding_prepared_under_another_folder_is_skipped(tmp_path):
     from prepare import prepared_elsewhere
     cache = tmp_path / "cache"
-    (cache / "dinesh_ruchi_bali_raw_images").mkdir(parents=True)
-    (cache / "dinesh_ruchi_bali_raw_images" / "catalog.db").write_bytes(b"")
-    again = tmp_path / "E" / "All Raw images" / "Dinesh & Ruchi (Bali)"
-    other = tmp_path / "E" / "All Raw images" / "Soumya & Piyush (Goa)"
-    assert prepared_elsewhere(again, cache) == "dinesh_ruchi_bali_raw_images"
+    (cache / "neel_tara_bali_raw_images").mkdir(parents=True)
+    (cache / "neel_tara_bali_raw_images" / "catalog.db").write_bytes(b"")
+    again = tmp_path / "E" / "All Raw images" / "Neel & Tara (Bali)"
+    other = tmp_path / "E" / "All Raw images" / "Isha & Kabir (Goa)"
+    assert prepared_elsewhere(again, cache) == "neel_tara_bali_raw_images"
     assert prepared_elsewhere(other, cache) is None
 
 
 def test_match_with_separate_raw_and_selected_folders(tmp_path):
     from engine.labels import load_label_csv
-    raw = tmp_path / "D" / "All Raw images" / "Ansh & Anjali"
-    sel = tmp_path / "E" / "All Selected images" / "Ansh & Anjali"
+    raw = tmp_path / "D" / "All Raw images" / "Dev & Mira"
+    sel = tmp_path / "E" / "All Selected images" / "Dev & Mira"
     for i in range(4):
         (raw / f"RBP_{i:04d}.JPG").parent.mkdir(parents=True, exist_ok=True)
         (raw / f"RBP_{i:04d}.JPG").write_bytes(os.urandom(100 + i))
@@ -54,7 +54,7 @@ def test_match_with_separate_raw_and_selected_folders(tmp_path):
                        capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Matched 1 of 1" in r.stdout and "no picks at all" not in r.stdout
-    out = tmp_path / "data" / "labels" / "all_raw_images_ansh_anjali.csv"
+    out = tmp_path / "data" / "labels" / "all_raw_images_dev_mira.csv"
     rows = list(csv.DictReader(open(out, encoding="utf-8")))
     assert len(rows) == 8 and sum(int(x["selected"]) for x in rows) == 1
     assert load_label_csv(out, raw) == {f"{p}_{i:04d}.JPG": int(p == "RBP" and i == 1)
@@ -88,8 +88,8 @@ def test_match_script_falls_back_to_capture_time(tmp_path, monkeypatch):
     import match_selected as script
     from engine.catalog import Catalog
     from engine.ingest import shoot_for
-    raw = tmp_path / "D" / "All Raw images" / "Ansh & Anjali"
-    sel = tmp_path / "E" / "All Selected images" / "Ansh & Anjali"
+    raw = tmp_path / "D" / "All Raw images" / "Dev & Mira"
+    sel = tmp_path / "E" / "All Selected images" / "Dev & Mira"
     raw.mkdir(parents=True)
     sel.mkdir(parents=True)
     for i in range(6):
@@ -110,7 +110,7 @@ def test_match_script_falls_back_to_capture_time(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["match_selected.py", str(raw), str(sel)])
     assert script.main() == 0
     rows = list(csv.DictReader(open(tmp_path / "labels" / f"{shoot.name}.csv", encoding="utf-8")))
-    assert [r["original"] for r in rows if r["selected"] == "1"] == ["Ansh & Anjali/CM2_3.JPG"]
+    assert [r["original"] for r in rows if r["selected"] == "1"] == ["Dev & Mira/CM2_3.JPG"]
 
 
 def test_a_photo_twice_in_the_raw_folder_is_marked_twice():
@@ -127,7 +127,7 @@ def test_repick_folder_is_one_stretch_with_a_hidden_key(tmp_path, monkeypatch):
     import testset as script
     from engine.catalog import Catalog
     from engine.ingest import shoot_for
-    root = tmp_path / "D" / "All Raw images" / "Rishi & Aashi"
+    root = tmp_path / "D" / "All Raw images" / "Arjun & Riya"
     root.mkdir(parents=True)
     shoot = shoot_for(root, cache_dir=tmp_path / "cache")
     with Catalog(shoot.db) as cat:
@@ -166,7 +166,7 @@ def test_blind_choice_on_the_test_photos(tmp_path, monkeypatch):
     import testcull as script
     from engine.catalog import Catalog
     from engine.ingest import shoot_for
-    root = tmp_path / "D" / "Rishi & Aashi"
+    root = tmp_path / "D" / "Arjun & Riya"
     shoot = shoot_for(root, cache_dir=tmp_path / "cache")
     folder = tmp_path / "Re-pick test"
     folder.mkdir()
@@ -190,6 +190,6 @@ def test_blind_choice_on_the_test_photos(tmp_path, monkeypatch):
     monkeypatch.setattr(script, "labelled_shoots", lambda *a, **k: [])
     monkeypatch.setattr(sys, "argv", ["testcull.py", str(root)])
     assert script.main() == 0
-    out = tmp_path / "out" / "KeepSake choice - Rishi & Aashi"
+    out = tmp_path / "out" / "KeepSake choice - Arjun & Riya"
     assert len(list((out / "Selected").iterdir())) == 10 and len(list((out / "Removed").iterdir())) == 90
     assert "Chosen by both              10" in (repick / f"{shoot.name}_keepsake.txt").read_text()

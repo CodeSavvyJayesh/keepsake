@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS photos (
     id          INTEGER PRIMARY KEY,
     path        TEXT NOT NULL UNIQUE,   -- main file, relative to the shoot folder, '/' separators
     companion   TEXT,                   -- JPEG/HEIF saved together with a RAW: same photo
-    folder      TEXT NOT NULL,          -- sub-folder, e.g. '27.08.2026 Welcome & Bhajan/Shashank'
+    folder      TEXT NOT NULL,          -- sub-folder, e.g. '27.08.2026 Welcome & Bhajan/Camera 2'
     kind        TEXT NOT NULL,          -- raw / jpeg / heif
     bytes       INTEGER NOT NULL,       -- file size (both files for a RAW+JPEG pair)
     mtime_ms    INTEGER NOT NULL,       -- last modified: a changed file is read again

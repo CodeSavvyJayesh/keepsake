@@ -34,7 +34,7 @@ function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === id));
   scene.setMode(id);
   $('#status').classList.toggle('busy', id === 'working');
-  $('#statusText').textContent = id === 'working' ? 'Working · everything stays on this laptop' : 'Offline · everything stays on this laptop';
+  $('#statusText').textContent = id === 'working' ? 'Working · everything stays on this computer' : 'Offline · everything stays on this computer';
 }
 function ready() { document.body.classList.remove('intro'); document.body.classList.add('ready'); }
 
@@ -50,6 +50,7 @@ async function boot() {
   if (b.background) { $('#photoBg').style.backgroundImage = `url("${b.background}")`; document.body.classList.add('has-photo-bg'); }
   if (b.name) { $('#kicker').innerHTML = `${b.name}<span class="sep"></span>Wedding photo culling`; document.title = `KeepSake · ${b.name}`; }
   renderRecent(home.recent || []);
+  $('#kit').hidden = (home.recent || []).length > 0;           // a new computer: no past weddings yet
   scene.setPhotos(home.sample || []);
 
   const st = await api('/api/state').catch(() => ({ status: 'idle' }));
@@ -76,7 +77,7 @@ function renderRecent(list) {
   const clean = s => s.replace(/[\uE000-\uF8FF]/g, '').replace(/\s+/g, ' ').trim();
   list = [...list].sort((p, q) => (q.ready - p.ready));            // connected drives first
   const SHOW = 4;
-  box.innerHTML = '<b>On this laptop</b>';
+  box.innerHTML = '<b>On this computer</b>';
   list.forEach((w, k) => {
     const btn = document.createElement('button');
     btn.textContent = clean(w.name); btn.className = (w.ready ? '' : 'off') + (k >= SHOW ? ' more' : '');
@@ -112,6 +113,19 @@ $('#chooseBtn').onclick = async () => {
   $('#chooseBtn').disabled = true;
   try { const r = await api('/api/choose', { kind: 'photos' }); if (r.path) await useFolder(r.path); } catch (e) { toast(e.message); }
   $('#chooseBtn').disabled = false;
+};
+$('#kitBtn').onclick = async () => {                            // the studio's past weddings and branding
+  $('#kitBtn').disabled = true;
+  try {
+    const r = await api('/api/choose', { kind: 'kit' });
+    if (r.path) {
+      const k = await api('/api/import-kit', { folder: r.path });
+      toast(`Brought over ${k.weddings} past wedding${k.weddings === 1 ? '' : 's'}`
+        + (k.branding ? ' and the studio\u2019s branding' : '') + '. KeepSake now chooses like your studio.', 6000);
+      setTimeout(() => location.reload(), 2200);
+    }
+  } catch (e) { toast(e.message, 7000); }
+  $('#kitBtn').disabled = false;
 };
 $('#pasteForm').onsubmit = e => { e.preventDefault(); useFolder($('#pathInput').value.trim().replace(/^"|"$/g, '')); };
 $('#changeBtn').onclick = () => { $('#setup').hidden = true; $('#chooser').hidden = false; };

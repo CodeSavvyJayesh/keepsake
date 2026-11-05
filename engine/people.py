@@ -1,7 +1,7 @@
 """Phase 3: who is in each photo - the same person found again across the whole shoot.
 
 Every clear face has an SFace fingerprint (engine/faces.py). Fingerprints of the same person
-point the same way (high cosine similarity). Measured on the Dinesh & Ruchi wedding: two
+point the same way (high cosine similarity). Measured on the Neel & Tara wedding: two
 different faces in one photo reach 0.55 only 0.2% of the time, while the same face in the
 next burst frame is above 0.55 96% of the time.
 
@@ -15,7 +15,7 @@ is enough). So, in three steps:
 3. Every other fingerprinted face joins its closest person if similar enough.
 
 People are ranked by the number of photos they are in; at a wedding persons 1 and 2 are the
-bride and groom (checked by eye on the Dinesh & Ruchi wedding). Nothing leaves the laptop.
+bride and groom (checked by eye on the Neel & Tara wedding). Nothing leaves the laptop.
 """
 from __future__ import annotations
 

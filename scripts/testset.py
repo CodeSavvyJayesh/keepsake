@@ -1,7 +1,7 @@
 r"""The re-pick test: a folder of about 400 photos from a past wedding, for the studio's editor to
 select again without looking at their old selection.
 
-    ks testset "D:\All Raw images\Rishi & Aashi" [400] ["C:\KeepSake Output\Re-pick test"] [--small]
+    ks testset "D:\All Raw images\Arjun & Riya" [400] ["C:\KeepSake Output\Re-pick test"] [--small]
 
 --small: 2048-pixel copies (about 1 MB each instead of 13 MB), small enough to zip and send
 on WhatsApp as one document.
@@ -24,7 +24,7 @@ import numpy as np  # noqa: E402
 
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import DATA_DIR  # noqa: E402
+from engine.config import DATA_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.deliver import OutputError, check_output, copy_verified  # noqa: E402
 from engine.ingest import shoot_for  # noqa: E402
 from engine.labels import attach_labels  # noqa: E402
@@ -72,13 +72,13 @@ def main() -> int:
     small = "--small" in sys.argv
     args = [a for a in sys.argv[1:] if a.strip() and not a.startswith("--")]
     if not args:
-        print('Give the wedding\'s photo folder, for example:  ks testset "D:\\All Raw images\\Rishi & Aashi"')
+        print('Give the wedding\'s photo folder, for example:  ks testset "D:\\All Raw images\\Arjun & Riya"')
         return 1
     root = clean_path(args[0])
     n = int(args[1]) if len(args) > 1 and args[1].isdigit() else 400
     out_arg = next((a for a in args[1:] if not a.isdigit()), None)
     shoot = shoot_for(root)
-    out = clean_path(out_arg) if out_arg else Path("C:/KeepSake Output") / (
+    out = clean_path(out_arg) if out_arg else OUTPUT_ROOT / (
         f"Re-pick test - {root.name}" + (" (small)" if small else ""))
     if not shoot.db.exists():
         print(f'This wedding has not been prepared yet. Run first:  ks prepare "{root}"')

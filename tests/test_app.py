@@ -102,7 +102,7 @@ def test_progress_lines_of_the_real_steps_are_understood():
     m = app.PROGRESS.search("    " + bar.line())
     assert m and m.group(1) == "1,571" and m.group(2) == "6,284" and "left" not in m.group(4)
     assert app.wedding_name(Path("E:/Sharma Wedding/Raw")) == "Sharma Wedding"
-    assert app.wedding_name(Path("D:/All Raw images/Rishi & Aashi")) == "Rishi & Aashi"
+    assert app.wedding_name(Path("D:/All Raw images/Arjun & Riya")) == "Arjun & Riya"
 
 
 def test_branding_stays_on_this_laptop(server, tmp_path):
@@ -449,3 +449,46 @@ def test_just_view_copies_nothing_and_a_move_only_changes_the_choice(server, tmp
         deliver.apply(root, out, deliver.jobs_from(cat, "list"), progress=lambda _line: None)
     assert sorted(p.name for p in (out / "Selected" / "Haldi").iterdir()) == ["c.jpg", "d.jpg"]
     assert [p.name for p in (out / "Maybe" / "Haldi").iterdir()] == ["b.jpg"]
+
+
+def test_a_new_computer_brings_the_studios_learned_style_from_the_kit(server, tmp_path, monkeypatch):
+    """The KeepSake folder from a pen drive: past weddings (catalog, saved features, small copies),
+    the studio's picks and branding come over once; nothing already on this computer is replaced;
+    no photos needed."""
+    app, base, token = server
+    monkeypatch.setattr(app, "DATA_DIR", tmp_path / "data")
+    kit = tmp_path / "PEN DRIVE" / "KeepSake" / "data"
+    a, b = kit / "cache" / "wedding_a", kit / "cache" / "wedding_b"
+    for d in (a, b, a / "thumbs" / "000", kit / "branding"):
+        d.mkdir(parents=True, exist_ok=True)
+    (a / "catalog.db").write_bytes(b"A" * 100)
+    (a / "features.npz").write_bytes(b"F" * 50)
+    (a / "thumbs" / "000" / "000001.jpg").write_bytes(b"\xff\xd8")
+    (b / "catalog.db").write_bytes(b"B" * 100)
+    (b / "catalog.db-wal").write_bytes(b"W")
+    (kit / "branding" / "brand.json").write_text('{"name": "From the kit"}', encoding="utf-8")
+    (kit / "branding" / "logo.png").write_bytes(b"\x89PNG")
+    (kit / "labels").mkdir()
+    (kit / "labels" / "wedding_c.csv").write_text("path,selected\n", encoding="utf-8")   # a wedding to read here
+    here_b = tmp_path / "cache" / "wedding_b"                      # already read on this computer
+    here_b.mkdir(parents=True)
+    (here_b / "catalog.db").write_bytes(b"mine")
+    (tmp_path / "branding").mkdir()
+    (tmp_path / "branding" / "brand.json").write_text('{"name": "Mine"}', encoding="utf-8")
+
+    r = call(base, "/api/import-kit", token, {"folder": str(tmp_path / "PEN DRIVE")})
+    assert r == {"ok": True, "weddings": 1, "already": 1, "branding": 1, "labels": 1}
+    assert (app.DATA_DIR / "labels" / "wedding_c.csv").exists()
+    got = tmp_path / "cache" / "wedding_a"
+    assert (got / "catalog.db").read_bytes() == b"A" * 100 and (got / "thumbs" / "000" / "000001.jpg").exists()
+    assert (got / "features.npz").stat().st_mtime_ns == (a / "features.npz").stat().st_mtime_ns   # stays valid
+    assert (here_b / "catalog.db").read_bytes() == b"mine" and not (here_b / "catalog.db-wal").exists()
+    assert json.loads((tmp_path / "branding" / "brand.json").read_text())["name"] == "Mine"
+    assert (tmp_path / "branding" / "logo.png").exists()
+    r = call(base, "/api/import-kit", token, {"folder": str(kit)})                 # the data folder itself works too
+    assert r["weddings"] == 0 and r["already"] == 2
+
+    (tmp_path / "Holiday").mkdir()
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(base, "/api/import-kit", token, {"folder": str(tmp_path / "Holiday")})
+    assert e.value.code == 400 and "no KeepSake data" in json.loads(e.value.read())["error"]

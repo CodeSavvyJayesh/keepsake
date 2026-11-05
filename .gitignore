@@ -43,6 +43,7 @@ __pycache__/
 build/
 dist/
 *.spec
+!packaging/KeepSake.spec
 
 # --- Node / Electron (Phase 5) ---
 node_modules/

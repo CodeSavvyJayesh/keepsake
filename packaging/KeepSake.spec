@@ -1,0 +1,80 @@
+# PyInstaller recipe for the KeepSake Mac app (KeepSake.app), built by .github/workflows/build.yml:
+#
+#     pyinstaller --noconfirm --clean packaging/KeepSake.spec
+#
+# Before building, tools/models must hold the AI models (python scripts/models.py) and
+# tools/exiftool the Mac ExifTool (the workflow downloads it). The studio's own data (past
+# weddings, branding) is never inside the app: it lives in ~/Library/Application Support/KeepSake.
+import importlib.util
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_all
+
+ROOT = Path(SPECPATH).parent
+VERSION = (ROOT / "packaging" / "VERSION").read_text().strip()
+
+for needed in ("tools/models/clip_vit_b32_vision_int8.onnx", "tools/exiftool/exiftool"):
+    if not (ROOT / needed).exists():
+        raise SystemExit(f"{needed} is missing: download the models and ExifTool first")
+
+datas = [(str(ROOT / "app" / "ui"), "app/ui"),
+         (str(ROOT / "tools" / "models"), "tools/models"),
+         (str(ROOT / "tools" / "exiftool"), "tools/exiftool"),
+         # learn.py and shots.py as files too: their fingerprint tells whether a past wedding's saved
+         # features are still valid, and the same files as on the laptop keep the pen-drive kit's valid
+         (str(ROOT / "engine" / "learn.py"), "engine"),
+         (str(ROOT / "engine" / "shots.py"), "engine")]
+datas += [(str(f), "engine") for f in sorted((ROOT / "engine").glob("*.md"))]   # the judge's prompts
+binaries = []
+# Every step and engine module by name (the app runs steps with `--run <name>`, so nothing imports
+# them directly; listing them is sturdier than asking PyInstaller to discover them)
+hiddenimports = (["scripts", "engine", "keepsake_app"]
+                 + [f"scripts.{p.stem}" for p in sorted((ROOT / "scripts").glob("*.py")) if p.stem != "__init__"]
+                 + [f"engine.{p.stem}" for p in sorted((ROOT / "engine").glob("*.py")) if p.stem != "__init__"])
+for package in ("rawpy", "pillow_heif", "mediapipe", "onnxruntime", "lightgbm", "webview"):
+    d, b, h = collect_all(package)
+    datas += d
+    binaries += b
+    hiddenimports += h
+
+# OpenCV: its Python loader (cv2/__init__.py) trips over the Mac app's layout ("recursion is
+# detected during loading of cv2"), so the app carries OpenCV's compiled module itself as the
+# top-level cv2, without the loader, and its libraries beside it. KeepSake uses only the
+# compiled functions (FaceDetectorYN, imdecode, ...), never the loader's extras.
+CV2_DIR = Path(importlib.util.find_spec("cv2").origin).parent
+CV2_NATIVE = sorted(CV2_DIR.rglob("cv2*.so"))
+if not CV2_NATIVE:
+    raise SystemExit(f"OpenCV's compiled module was not found in {CV2_DIR}")
+binaries.append((str(CV2_NATIVE[0]), "."))
+binaries += [(str(f), ".dylibs") for f in sorted((CV2_NATIVE[0].parent / ".dylibs").glob("*.dylib"))]
+
+a = Analysis(
+    [str(ROOT / "app" / "keepsake_main.py")],
+    pathex=[str(ROOT), str(ROOT / "app")],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    excludes=["cv2", "tkinter", "pytest", "IPython"],          # MediaPipe needs matplotlib
+    noarchive=False,
+)
+pyz = PYZ(a.pure)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="KeepSake", console=False,
+          argv_emulation=False, codesign_identity=None, entitlements_file=None)
+coll = COLLECT(exe, a.binaries, a.datas, name="KeepSake")
+app = BUNDLE(
+    coll,
+    name="KeepSake.app",
+    bundle_identifier="app.keepsake.desktop",
+    version=VERSION,
+    info_plist={
+        "CFBundleDisplayName": "KeepSake",
+        "CFBundleShortVersionString": VERSION,
+        "LSMinimumSystemVersion": "14.0",
+        "NSHighResolutionCapable": True,
+        "NSRemovableVolumesUsageDescription":
+            "KeepSake reads the wedding photos on this drive. It never changes or deletes them.",
+        "NSDesktopFolderUsageDescription": "KeepSake reads wedding photos and saves its folders where you choose.",
+        "NSDocumentsFolderUsageDescription": "KeepSake reads wedding photos and saves its folders where you choose.",
+        "NSDownloadsFolderUsageDescription": "KeepSake reads wedding photos and saves its folders where you choose.",
+    },
+)

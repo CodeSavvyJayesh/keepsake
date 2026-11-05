@@ -1,8 +1,8 @@
 r"""Claude as a second editor, tested on 400 photos of a past wedding (paid: needs the API key).
 
-    ks judge "Shevaun" --test                   400 photos of that wedding, Claude Opus
-    ks judge "Shevaun" --test --model haiku     other models: haiku, sonnet, opus, fable (several: haiku,opus)
-    ks judge "D:\All Raw images\Rishi & Aashi" --test   Rishi: the re-pick test (studio picked twice)
+    ks judge "Sana" --test                   400 photos of that wedding, Claude Opus
+    ks judge "Sana" --test --model haiku     other models: haiku, sonnet, opus, fable (several: haiku,opus)
+    ks judge "D:\All Raw images\Arjun & Riya" --test   Arjun: the re-pick test (studio picked twice)
     options:  --now     no waiting, full price (default: batch, half price, usually a few minutes)
               --yes     do not ask before spending
               --max 3   never spend more than $3 in this run (default 3)
@@ -26,7 +26,7 @@ The test photos' small copies are sent, one request per shot (near-identical fra
 Nothing is sent before the price is shown and you type yes; answers are kept on this laptop
 (data\judge), so running it again costs nothing for shots already answered.
 
-Three lists of the same size are compared with the studio's picks (for Rishi also its re-pick):
+Three lists of the same size are compared with the studio's picks (for Arjun also its re-pick):
     KeepSake alone       ks cull's own choice among the test photos
     Claude               shots ranked by Claude's score, Claude's best frame
     KeepSake + Claude    shots ranked by both scores together, Claude's best frame
@@ -52,13 +52,12 @@ import numpy as np  # noqa: E402
 from engine import judge  # noqa: E402
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.ingest import Shoot, cache_path, duration, shoot_for, slug  # noqa: E402
 from engine.learn import photo_features  # noqa: E402
 from engine.shots import group_shots  # noqa: E402
 
 REPICK_DIR = DATA_DIR / "repick"
-OUTPUT_ROOT = Path("C:/KeepSake Output")
 
 
 def option(name: str, default: str | None = None) -> str | None:
@@ -83,7 +82,7 @@ def zscore(v: np.ndarray) -> np.ndarray:
 
 
 def find_shoot(text: str) -> Shoot | None:
-    """The prepared wedding for a photo folder, or for part of its name ("Shevaun")."""
+    """The prepared wedding for a photo folder, or for part of its name ("Sana")."""
     shoot = shoot_for(clean_path(text))
     if shoot.db.exists():
         return shoot
@@ -128,7 +127,7 @@ def window_rows(cat: Catalog, shoot: Shoot, n: int):
     clocks, about the wedding's usual pick rate), KeepSake's blind choice (learned only from the
     other weddings) and the studio's choice. Uses the previews on this laptop: no drive needed.
     Kept in data\\judge\\<wedding>\\test_photos.csv, so every run uses the same photos."""
-    from testset import choose_window
+    from scripts.testset import choose_window
     from engine.cull import cull_shoot, labelled_shoots
     test_file = judge.JUDGE_DIR / shoot.name / "test_photos.csv"
     if not test_file.exists():
@@ -172,7 +171,7 @@ def main() -> int:
     args = [a for a in sys.argv[1:] if a.strip() and not a.startswith("--") and a not in values
             and not all(w in judge.MODELS for w in a.lower().split(",") if w)]
     if not args or "--test" not in sys.argv:
-        print('Give a past wedding, for example:  ks judge "Shevaun" --test')
+        print('Give a past wedding, for example:  ks judge "Sana" --test')
         return 1
     if not models:
         print(f"Unknown model. Use: {', '.join(judge.MODELS)}  (for example --model opus)")
@@ -182,7 +181,7 @@ def main() -> int:
     now = "--now" in sys.argv
     shoot = find_shoot(args[0])
     if shoot is None:
-        print(f"No prepared wedding matches {args[0]!r}. Give its photo folder or part of its name, e.g. \"Shevaun\".")
+        print(f"No prepared wedding matches {args[0]!r}. Give its photo folder or part of its name, e.g. \"Sana\".")
         return 1
     try:
         api_key = judge.load_key()

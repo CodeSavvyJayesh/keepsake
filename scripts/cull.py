@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import CACHE_DIR  # noqa: E402
+from engine.config import CACHE_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.cull import TARGET, UNSURE_BAND, cull_shoot, labelled_shoots  # noqa: E402
 from engine.ingest import cache_path, duration, shoot_for  # noqa: E402
 from engine.labels import attach_labels  # noqa: E402
@@ -206,7 +206,7 @@ def main() -> int:
     print("\n" + text)
     (shoot.cache / "cull_report.txt").write_text(text + "\n", encoding="utf-8")
     print(f"\nReview page (open it in your browser): {page}")
-    print(f'Next:  ks apply "{root}" "C:\\KeepSake Output\\{shoot.name}"')
+    print(f'Next:  ks apply "{root}" "{OUTPUT_ROOT / shoot.name}"')
     return 0
 
 

@@ -1,8 +1,8 @@
 r"""The blind test: KeepSake chooses from the same re-pick test photos, without ever having seen
 this wedding's studio choices.
 
-    ks cull "D:\All Raw images\Rishi & Aashi"         (first: learns only from the OTHER weddings)
-    ks testcull "D:\All Raw images\Rishi & Aashi" [--keep 10]
+    ks cull "D:\All Raw images\Arjun & Riya"         (first: learns only from the OTHER weddings)
+    ks testcull "D:\All Raw images\Arjun & Riya" [--keep 10]
 
 After a studio-style cull (the default) KeepSake's choice is the cull's own Selected photos among
 the test photos: one photo per shot. With --keep (or after ks cull --safe) it keeps that share of
@@ -23,12 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.catalog import Catalog, now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, OUTPUT_ROOT  # noqa: E402
 from engine.cull import labelled_shoots  # noqa: E402
 from engine.ingest import shoot_for  # noqa: E402
 
 REPICK_DIR = DATA_DIR / "repick"
-OUTPUT_ROOT = Path("C:/KeepSake Output")
 
 
 def studio_rate(others: list[Path]) -> float:
@@ -48,7 +47,7 @@ def main() -> int:
         keep = float(sys.argv[i + 1].strip("%")) / 100
         args = [a for a in args if a != sys.argv[i + 1]]
     if not args:
-        print('Give the wedding\'s photo folder, for example:  ks testcull "D:\\All Raw images\\Rishi & Aashi"')
+        print('Give the wedding\'s photo folder, for example:  ks testcull "D:\\All Raw images\\Arjun & Riya"')
         return 1
     root = clean_path(args[0])
     shoot = shoot_for(root)

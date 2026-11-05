@@ -6,8 +6,8 @@ r"""Prepare one or many weddings in one go, unattended: every analysis step, in 
 First form: a wedding folder with a Raw folder and a Selected folder inside (a past wedding, to
 learn from: the studio's choices are matched first), or just the folder of photos to cull.
 Second form: folders that hold one folder per wedding of photos, and (--selected) one folder
-per wedding of the studio's picks; they are paired by the couple's names ('Twinkle & Jacky
-(Dubai)' pairs with 'twinkle n jacky'). A wedding already prepared under another folder name
+per wedding of the studio's picks; they are paired by the couple's names ('Ira & Kian
+(Dubai)' pairs with 'ira n kian'). A wedding already prepared under another folder name
 is skipped, so it is never learned from twice.
 
 For each wedding:  ingest -> match (when the picks are known) -> quality -> faces -> clip -> groups
@@ -28,10 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine.catalog import now_text  # noqa: E402
 from engine.cli import clean_path  # noqa: E402
-from engine.config import CACHE_DIR, DATA_DIR  # noqa: E402
+from engine.config import CACHE_DIR, DATA_DIR, script_command  # noqa: E402
 from engine.ingest import duration, shoot_for  # noqa: E402
 
-SCRIPTS = Path(__file__).resolve().parent
 STEPS = ["ingest", "quality", "faces", "clip", "groups"]
 NOT_NAMES = {"n", "and", "weds", "wedding", "raw", "image", "images", "s", "selected", "select", "photos"}
 
@@ -47,7 +46,7 @@ def plan(folder: Path) -> tuple[Path | None, Path]:
 
 
 def couple_key(name: str) -> tuple[str, ...]:
-    """The first two names in a folder name: 'Vaibhav & Preeyam { Jaipur }' -> ('vaibhav', 'preeyam')."""
+    """The first two names in a folder name: 'Om & Zoya { Jaipur }' -> ('om', 'zoya')."""
     words = [w for w in re.findall(r"[a-z]+", name.lower()) if w not in NOT_NAMES]
     return tuple(words[:2])
 
@@ -84,7 +83,7 @@ def prepared_elsewhere(photos: Path, cache_dir: Path = CACHE_DIR) -> str | None:
 
 
 def run(script: str, args: list[Path], log) -> int:
-    cmd = [sys.executable, str(SCRIPTS / f"{script}.py")] + [str(a) for a in args]
+    cmd = script_command(script, *args)
     log.write("\n$ ks " + script + " " + " ".join(f'"{a}"' for a in args) + "\n")
     log.flush()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .catalog import Catalog
-from .config import DATA_DIR
+from .config import DATA_DIR, OUTPUT_ROOT
 
 SELECTED, MAYBE, NOT_SELECTED = "Selected", "Maybe", "Not selected"     # the output folders
 MANIFEST = "KeepSake manifest.csv"
@@ -76,8 +76,8 @@ def check_output(root: Path, out: Path) -> None:
     root, out = Path(os.path.abspath(root)), Path(os.path.abspath(out))
     if out == root or root in out.parents or out in root.parents:
         raise OutputError("The output folder must not be inside the photo folder (the client's "
-                          "drive is never written to). Choose a folder on this laptop, for example "
-                          "C:\\KeepSake Output\\<wedding name>.")
+                          "drive is never written to). Choose a folder on this computer, for example "
+                          f"{OUTPUT_ROOT / '<wedding name>'}.")
     drive = _device(root)
     if drive is not None and drive == _device(out) and drive != _device(DATA_DIR):
         raise OutputError("The output folder is on the same drive as the photos. KeepSake never "

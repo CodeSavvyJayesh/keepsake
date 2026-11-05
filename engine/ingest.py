@@ -47,7 +47,7 @@ def slug(text: str) -> str:
 @dataclass
 class Shoot:
     root: Path               # the shoot folder on the drive (only ever read)
-    name: str                # folder name used for the cache, e.g. 'dinesh_ruchi_bali_raw_images'
+    name: str                # folder name used for the cache, e.g. 'neel_tara_bali_raw_images'
     cache: Path              # data/cache/<name> on this laptop
 
     @property
