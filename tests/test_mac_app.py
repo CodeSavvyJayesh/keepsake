@@ -68,4 +68,5 @@ def test_the_package_recipe_puts_the_screens_where_the_app_looks():
     assert app.UI_DIR == config.ROOT / "app" / "ui" and (app.UI_DIR / "index.html").exists()
     spec = (ROOT / "packaging" / "KeepSake.spec").read_text()
     assert '"app" / "ui"), "app/ui")' in spec and '"tools/models"' in spec and '"tools/exiftool"' in spec
+    assert '"engine" / "learn.py"), "engine")' in spec and '"engine" / "shots.py"), "engine")' in spec
     assert (ROOT / "packaging" / "VERSION").read_text().strip()

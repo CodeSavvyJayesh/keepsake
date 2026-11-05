@@ -19,7 +19,12 @@ for needed in ("tools/models/clip_vit_b32_vision_int8.onnx", "tools/exiftool/exi
 
 datas = [(str(ROOT / "app" / "ui"), "app/ui"),
          (str(ROOT / "tools" / "models"), "tools/models"),
-         (str(ROOT / "tools" / "exiftool"), "tools/exiftool")]
+         (str(ROOT / "tools" / "exiftool"), "tools/exiftool"),
+         # learn.py and shots.py as files too: their fingerprint tells whether a past wedding's saved
+         # features are still valid, and the same files as on the laptop keep the pen-drive kit's valid
+         (str(ROOT / "engine" / "learn.py"), "engine"),
+         (str(ROOT / "engine" / "shots.py"), "engine")]
+datas += [(str(f), "engine") for f in sorted((ROOT / "engine").glob("*.md"))]   # the judge's prompts
 binaries = []
 # Every step and engine module by name (the app runs steps with `--run <name>`, so nothing imports
 # them directly; listing them is sturdier than asking PyInstaller to discover them)
