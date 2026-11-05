@@ -1,0 +1,32 @@
+# One-off check: which of KeepSake's libraries publish versions for Intel Macs (no build, Linux only).
+name: Intel Mac check
+on:
+  push:
+    branches: [intel-check]
+jobs:
+  wheels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Libraries with an Intel Mac version
+        run: |
+          python -m pip install -q --upgrade pip
+          for plat in macosx_10_15_x86_64 macosx_13_0_x86_64; do
+            echo "=================== $plat (Python 3.11)"
+            for pin in rawpy==0.27.1 pillow==12.3.0 pillow-heif==1.8.1 numpy==2.4.6 opencv-contrib-python==5.0.0.93 mediapipe==1.1.1 onnxruntime==1.31.0 lightgbm==4.7.0 pyobjc-core psutil; do
+              pkg=${pin%%==*}
+              rm -rf /tmp/w
+              if pip download -q --no-deps --only-binary=:all: --python-version 3.11 --implementation cp --platform $plat -d /tmp/w "$pin" >/dev/null 2>&1; then
+                echo "  $pin: YES ($(ls /tmp/w))"
+              else
+                rm -rf /tmp/w
+                if pip download -q --no-deps --only-binary=:all: --python-version 3.11 --implementation cp --platform $plat -d /tmp/w "$pkg" >/dev/null 2>&1; then
+                  echo "  $pin: no; newest with an Intel version: $(ls /tmp/w)"
+                else
+                  echo "  $pin: NONE for this Mac"
+                fi
+              fi
+            done
+          done
