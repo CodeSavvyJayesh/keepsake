@@ -376,3 +376,76 @@ def test_the_opening_uses_a_wedding_whose_small_copies_are_here(server, tmp_path
         home = call(base, "/api/home", token)
         assert len(home["recent"]) == 3
         assert len(home["sample"]) == 48 and all(u.startswith("/photo/c_read_here/") for u in home["sample"])
+
+
+def test_just_view_copies_nothing_and_a_move_only_changes_the_choice(server, tmp_path):
+    """'Just view': read and choose, then stop; nothing is written anywhere. A person moves photos
+    straight away (only the choice changes, even with the drive away), sees the studio's picks
+    counted, and a later run with copying puts every photo where the person moved it."""
+    app, base, token = server
+    from engine import deliver
+    from engine.catalog import Catalog
+    from engine.ingest import cache_path
+    folder = tmp_path / "Sharma Wedding" / "Raw"
+    folder.mkdir(parents=True)
+    call(base, "/api/start", token, {"folder": str(folder), "keep": "0.07", "copy": False,
+                                      "output": str(tmp_path / "should not be made")})
+    for _ in range(100):
+        st = call(base, "/api/state", token)
+        if st["status"] != "running":
+            break
+        time.sleep(0.1)
+    assert st["status"] == "done", st
+    assert st["progress"] == 1 and st["output"] == "" and st["result"]["copied"] is False
+    assert {s["key"]: s["state"] for s in st["stages"]}["copy"] == "skipped"
+    assert (st["result"]["selected"], st["result"]["not_selected"]) == (12, 88)
+    assert not (tmp_path / "out").exists() and not (tmp_path / "should not be made").exists()
+    assert not any("Copying" in line for line in st["log"])                         # apply.py never ran
+
+    root = tmp_path / "drive" / "Shah Wedding"
+    (root / "Haldi").mkdir(parents=True)
+    names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
+    for n in names:
+        (root / "Haldi" / n).write_bytes(n.encode() * 1000)
+    shoot, db = "shah", app.CACHE_DIR / "shah" / "catalog.db"
+    with Catalog(db) as cat:
+        with cat.db:
+            cat.db.executemany("INSERT INTO photos (id, path, folder, kind, bytes, mtime_ms, status, taken_s) "
+                               "VALUES (?, ?, 'Haldi', 'jpeg', 4000, 0, 'done', ?)",
+                               [(i + 1, f"Haldi/{n}", i) for i, n in enumerate(names)])
+            cat.db.executemany("INSERT INTO labels (id, selected, source) VALUES (?, ?, 'test')",
+                               [(1, 1), (2, 0), (3, 1), (4, 0)])
+        cat.save_cull([(1, "selected", 0, 90, "", None), (2, "selected", 0, 70, "", None),
+                       (3, "removed", 0, 60, "Same shot as b.jpg, which is kept", 2), (4, "removed", 0, 10, "Rated low", None)],
+                      {}, {1: (1, 1), 2: (2, 1), 3: (2, 2), 4: (4, 1)}, best={1})
+    for pid in range(1, 5):
+        thumb = cache_path(app.CACHE_DIR / shoot, "thumbs", pid)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        thumb.write_bytes(b"\xff\xd8")
+    with app.JOB.lock:
+        app.JOB.shoot_name, app.JOB.folder = shoot, root            # the finished 'just view' run, for this wedding
+    root.rename(tmp_path / "drive" / "away")                        # works without the photo drive too
+
+    c = app.counts(shoot)
+    assert (c["selected"], c["maybe"], c["not_selected"], c["studio_in_selected"], c["studio_near"]) == (1, 1, 2, 1, 2)
+    r = call(base, "/api/move", token, {"id": 3, "to": "selected"})
+    assert r["photo"]["tier"] == "selected" and r["photo"]["moved"]
+    assert (r["result"]["selected"], r["result"]["studio_in_selected"], r["result"]["moved"]) == (2, 2, 1)
+    r = call(base, "/api/move", token, {"id": 2, "to": "not_selected"})
+    assert (r["result"]["maybe"], r["result"]["not_selected"]) == (0, 2)
+    r = call(base, "/api/move", token, {"id": 2, "to": "maybe"})              # Undo: KeepSake's own choice
+    assert r["photo"]["tier"] == "maybe" and not r["photo"]["moved"] and r["result"]["moved"] == 1
+    r = call(base, "/api/swap", token, {"id": 4, "replace": 1})               # Swap frame, also only the choice
+    assert r["selected"]["tier"] == "selected" and r["not_selected"]["id"] == 1
+    assert app.JOB.result["selected"] == 2
+    assert not (tmp_path / "out").exists() and not list(tmp_path.glob("**/Selected"))
+
+    # later, a run with copying: KeepSake chooses again, the person's moves stay, the copies follow them
+    (tmp_path / "drive" / "away").rename(root)
+    out = tmp_path / "out" / "Shah Wedding"
+    with Catalog(db) as cat:
+        cat.save_cull([(1, "selected", 0, 90, "", None), (2, "selected", 0, 70, "", None),
+                       (3, "removed", 0, 60, "", 2), (4, "removed", 0, 10, "", None)], {}, best={1})
+        deliver.apply(root, out, deliver.jobs_from(cat, "list"), progress=lambda _line: None)
+    assert sorted(p.name for p in (out / "Selected" / "Haldi").iterdir()) == ["c.jpg", "d.jpg"]
+    assert [p.name for p in (out / "Maybe" / "Haldi").iterdir()] == ["b.jpg"]
