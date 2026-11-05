@@ -102,7 +102,7 @@ def test_progress_lines_of_the_real_steps_are_understood():
     m = app.PROGRESS.search("    " + bar.line())
     assert m and m.group(1) == "1,571" and m.group(2) == "6,284" and "left" not in m.group(4)
     assert app.wedding_name(Path("E:/Sharma Wedding/Raw")) == "Sharma Wedding"
-    assert app.wedding_name(Path("D:/All Raw images/Rishi & Aashi")) == "Rishi & Aashi"
+    assert app.wedding_name(Path("D:/All Raw images/Arjun & Riya")) == "Arjun & Riya"
 
 
 def test_branding_stays_on_this_laptop(server, tmp_path):

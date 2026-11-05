@@ -1,7 +1,7 @@
 r"""Match the studio's selected photos back to their originals, and save the labels.
 
-Run:  ks match "D:\Dinesh & Ruchi (Bali)"
-  or: ks match "D:\All Raw images\Ansh & Anjali" "E:\All Selected images\Ansh & Anjali"
+Run:  ks match "D:\Neel & Tara (Bali)"
+  or: ks match "D:\All Raw images\Dev & Mira" "E:\All Selected images\Dev & Mira"
 
 One folder: it must contain two subfolders, one with "raw" in its name (every photo shot) and
 one with "select" in its name (the studio's picks). Two folders: the photos, then the picks.
@@ -113,8 +113,8 @@ def prefix(name: str) -> str:
 def main() -> int:
     args = [a for a in sys.argv[1:] if a.strip()]
     if not args:
-        print('Give the wedding folder, for example:  ks match "D:\\Dinesh & Ruchi (Bali)"')
-        print('or the photos and the picks:  ks match "D:\\All Raw images\\Ansh" "E:\\All Selected images\\Ansh"')
+        print('Give the wedding folder, for example:  ks match "D:\\Neel & Tara (Bali)"')
+        print('or the photos and the picks:  ks match "D:\\All Raw images\\Dev" "E:\\All Selected images\\Dev"')
         return 1
     from engine.cli import clean_path
     if len(args) >= 2:

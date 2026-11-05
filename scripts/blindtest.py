@@ -99,7 +99,7 @@ def add_studio_folders(folder: Path) -> tuple[int, int, int] | None:
 
 
 def couple_of(shoot: str) -> str:
-    """'all_raw_images_shevaun_brian_jaisalmer' and 'shevaun_brian_jaisalmer_22_11_2025_..._sangeet' -> 'shevaun_brian'."""
+    """'all_raw_images_sana_leo_jaisalmer' and 'sana_leo_jaisalmer_22_11_2025_..._sangeet' -> 'sana_leo'."""
     name = shoot[len("all_raw_images_"):] if shoot.startswith("all_raw_images_") else shoot
     return "_".join(name.split("_")[:2])
 

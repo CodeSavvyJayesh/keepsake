@@ -118,7 +118,7 @@ def worker_count() -> int:
 # straight out of the file instead of decoding the full 24-45 megapixel image.
 ANALYSIS_PX = 1620
 # A built-in preview smaller than this is not used. 900 lets in DJI drone DNGs (960 x 540
-# preview): rendering their 73 MB RAW instead took 49 s per photo at the Dinesh & Ruchi wedding.
+# preview): rendering their 73 MB RAW instead took 49 s per photo at the Neel & Tara wedding.
 MIN_PREVIEW_PX = 900
 MAX_PREVIEW_BYTES = 4 * 2**20  # a "preview" bigger than this is really a second full photo
 THUMB_PX = 400                 # thumbnails for the photo grid

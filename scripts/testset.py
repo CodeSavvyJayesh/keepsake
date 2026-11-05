@@ -1,7 +1,7 @@
 r"""The re-pick test: a folder of about 400 photos from a past wedding, for the studio's editor to
 select again without looking at their old selection.
 
-    ks testset "D:\All Raw images\Rishi & Aashi" [400] ["C:\KeepSake Output\Re-pick test"] [--small]
+    ks testset "D:\All Raw images\Arjun & Riya" [400] ["C:\KeepSake Output\Re-pick test"] [--small]
 
 --small: 2048-pixel copies (about 1 MB each instead of 13 MB), small enough to zip and send
 on WhatsApp as one document.
@@ -72,7 +72,7 @@ def main() -> int:
     small = "--small" in sys.argv
     args = [a for a in sys.argv[1:] if a.strip() and not a.startswith("--")]
     if not args:
-        print('Give the wedding\'s photo folder, for example:  ks testset "D:\\All Raw images\\Rishi & Aashi"')
+        print('Give the wedding\'s photo folder, for example:  ks testset "D:\\All Raw images\\Arjun & Riya"')
         return 1
     root = clean_path(args[0])
     n = int(args[1]) if len(args) > 1 and args[1].isdigit() else 400

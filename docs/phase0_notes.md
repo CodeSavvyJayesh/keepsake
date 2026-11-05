@@ -15,7 +15,7 @@ Phase 0 complete on 16 Oct 2026. These numbers set the targets for Phase 1.
 - JPEG decode, 24 MP: full 190 ms, reduced 120 ms (1.6x faster)
 - Tests: 11 passing (scanner + matching)
 
-## First real wedding: Dinesh & Ruchi (Bali)
+## First real wedding: Neel & Tara (Bali)
 
 Client drive: 2 TB external hard disk, read in place (never copied, never written to).
 
@@ -34,7 +34,7 @@ Client drive: 2 TB external hard disk, read in place (never copied, never writte
   - by file name + size: 466 (several cameras reuse the same file names)
 - Not matched: 2, both typo names (`DSC_0342.JPGG.JPG`, `DSC_0509.JPGG.JPG`)
 - Selected copies are exact copies of the originals (same size), not edited versions
-- Labels saved on this laptop: `data\labels\dinesh_ruchi_bali.csv`
+- Labels saved on this laptop: `data\labels\neel_tara_bali.csv`
 
 | Event | Photos | Selected | Kept |
 | --- | --- | --- | --- |

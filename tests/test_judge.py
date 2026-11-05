@@ -127,7 +127,7 @@ def test_claude_test_on_the_repick_photos(tmp_path, monkeypatch):
     for name in ("past_one", "past_two"):
         (tmp_path / name).mkdir()
         fake_wedding(tmp_path / name / "catalog.db").close()
-    root = tmp_path / "D" / "Rishi & Aashi"
+    root = tmp_path / "D" / "Arjun & Riya"
     shoot = shoot_for(root, cache_dir=tmp_path / "cache")
     shoot.cache.mkdir(parents=True)
     cat = fake_wedding(shoot.db, n=60, labelled=False)
@@ -160,7 +160,7 @@ def test_claude_test_on_the_repick_photos(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["judge.py", str(root), "--test", "--model", "haiku", "opus", "--yes"])
     assert script.main() == 0
     assert len(fake.sent) == 42                     # 20 shots + 1 sequence, x 2 models, once each
-    out = tmp_path / "out" / "Claude test - Rishi & Aashi"
+    out = tmp_path / "out" / "Claude test - Arjun & Riya"
     text = (out / "Summary.txt").read_text(encoding="utf-8")
     assert "KeepSake alone" in text and "Claude, whole sequence" in text and "20 of 20 shots answered" in text
     assert "20 scored in round 2" in text
@@ -181,7 +181,7 @@ def test_claude_test_on_any_past_wedding_without_the_drive(tmp_path, monkeypatch
     from engine import ingest
     from test_cull import fake_wedding
     cache = tmp_path / "cache"
-    for name in ("past_one", "past_two", "all_raw_images_shevaun_brian_jaisalmer"):
+    for name in ("past_one", "past_two", "all_raw_images_sana_leo_jaisalmer"):
         (cache / name).mkdir(parents=True)
         cat = fake_wedding(cache / name / "catalog.db", n=90)
         cat.db.execute("INSERT INTO clocks (body, offset, support) VALUES ('A', 0, 9)")
@@ -199,14 +199,14 @@ def test_claude_test_on_any_past_wedding_without_the_drive(tmp_path, monkeypatch
     monkeypatch.setattr(script, "CACHE_DIR", cache)
     monkeypatch.setattr(script, "REPICK_DIR", tmp_path / "repick")
     monkeypatch.setattr(script, "OUTPUT_ROOT", tmp_path / "out")
-    monkeypatch.setattr(sys, "argv", ["judge.py", "Shevaun", "--test", "--photos", "30", "--model", "haiku", "--yes"])
+    monkeypatch.setattr(sys, "argv", ["judge.py", "Sana", "--test", "--photos", "30", "--model", "haiku", "--yes"])
     assert script.main() == 0
     sent = len(fake.sent)
     assert 0 < sent <= 31                                          # shots + 1 sequence
-    key = list(csv.DictReader(open(tmp_path / "judge" / "all_raw_images_shevaun_brian_jaisalmer" / "test_photos.csv",
+    key = list(csv.DictReader(open(tmp_path / "judge" / "all_raw_images_sana_leo_jaisalmer" / "test_photos.csv",
                                    encoding="utf-8")))
     assert len(key) == 30 and {r["keepsake"] for r in key} <= {"selected", "removed"}
-    out = tmp_path / "out" / "Claude test - Shevaun"
+    out = tmp_path / "out" / "Claude test - Sana"
     assert len(list(next(out.glob("Test photos (*)")).iterdir())) == 30
     studio = next(out.glob("Studio selected (*)"))
     assert len(list(studio.iterdir())) == sum(r["studio_selected"] == "1" for r in key)
