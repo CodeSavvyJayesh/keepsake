@@ -449,7 +449,6 @@ def test_just_view_copies_nothing_and_a_move_only_changes_the_choice(server, tmp
         deliver.apply(root, out, deliver.jobs_from(cat, "list"), progress=lambda _line: None)
     assert sorted(p.name for p in (out / "Selected" / "Haldi").iterdir()) == ["c.jpg", "d.jpg"]
     assert [p.name for p in (out / "Maybe" / "Haldi").iterdir()] == ["b.jpg"]
-<<<<<<< HEAD
 
 
 def test_a_new_computer_brings_the_studios_learned_style_from_the_kit(server, tmp_path):
@@ -488,5 +487,3 @@ def test_a_new_computer_brings_the_studios_learned_style_from_the_kit(server, tm
     with pytest.raises(urllib.error.HTTPError) as e:
         call(base, "/api/import-kit", token, {"folder": str(tmp_path / "Holiday")})
     assert e.value.code == 400 and "no KeepSake data" in json.loads(e.value.read())["error"]
-=======
->>>>>>> origin/main
